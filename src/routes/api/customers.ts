@@ -339,24 +339,40 @@ router.delete('/:customerId', async (req: Request, res: Response) => {
   }
 });
 
+// Vistas válidas disponibles en el sistema
+const VALID_VIEWS: ViewFeature[] = [
+  'dashboard',
+  'agentes',
+  'ubicaciones',
+  'analiticas',
+  'kommo',
+  'equipo',
+  'configuracion',
+  'consultas',
+  'tokens',
+];
+
+// Función para obtener vistas por defecto según el plan
+function getDefaultViews(plan: 'Básico' | 'Profesional' | 'Enterprise' | 'Custom'): ViewFeature[] {
+  switch (plan) {
+    case 'Básico':
+      return ['dashboard', 'agentes', 'configuracion'];
+    case 'Profesional':
+      return ['dashboard', 'agentes', 'ubicaciones', 'analiticas', 'equipo', 'configuracion'];
+    case 'Enterprise':
+    case 'Custom':
+      return ['dashboard', 'agentes', 'ubicaciones', 'analiticas', 'kommo', 'equipo', 'configuracion', 'consultas'];
+    default:
+      return ['dashboard', 'configuracion'];
+  }
+}
+
 // Obtener lista de features disponibles
 router.get('/features/list', async (req: Request, res: Response) => {
   try {
-    const features: ViewFeature[] = [
-      'dashboard',
-      'agentes',
-      'ubicaciones',
-      'analiticas',
-      'kommo',
-      'equipo',
-      'configuracion',
-      'consultas',
-      'tokens',
-    ];
-
     return res.json({
       success: true,
-      data: features,
+      data: VALID_VIEWS,
     });
   } catch (error) {
     console.error('Error al obtener features:', error);
@@ -381,44 +397,65 @@ router.get('/features', async (req: Request, res: Response) => {
     const customerIdParam = getQueryParam(req.query.customerId);
     const emailParam = getQueryParam(req.query.email);
     
-    console.log('[FEATURES] Query params recibidos:', { 
-      customerId: customerIdParam, 
-      email: emailParam,
-      rawCustomerId: req.query.customerId,
-      rawEmail: req.query.email
-    });
+    // Validar que al menos uno esté presente
+    if (!customerIdParam && !emailParam) {
+      // Intentar obtener del usuario actual desde las cookies como último recurso
+      const userEmail = req.cookies?.email;
+      if (userEmail) {
+        const db = await getMongoDb();
+        // Buscar usuario primero para obtener su customerId
+        const user = await db.collection('users').findOne({
+          email: userEmail.toLowerCase().trim(),
+        });
+        
+        if (user && user.customerId && ObjectId.isValid(user.customerId)) {
+          const customer = await db.collection<Customer>('customers').findOne({
+            _id: new ObjectId(user.customerId),
+          });
+          
+          if (customer) {
+            // Obtener vistas: usar enabledViews si existe y tiene elementos, sino usar defaults según plan
+            const enabledViews = customer.enabledViews && customer.enabledViews.length > 0
+              ? customer.enabledViews.filter(view => VALID_VIEWS.includes(view)) // Filtrar inválidos
+              : getDefaultViews(customer.planContratado || 'Básico');
+            
+            return res.json({
+              success: true,
+              data: {
+                enabledViews: enabledViews,
+              },
+            });
+          }
+        }
+      }
+      
+      return res.status(400).json({
+        success: false,
+        error: 'Se requiere customerId o email',
+      });
+    }
     
     const db = await getMongoDb();
     let customer: Customer | null = null;
-
+    
     // Priorizar customerId si está disponible
     if (customerIdParam) {
-      // Limpiar y validar el customerId
       const cleanCustomerId = customerIdParam.trim();
-      console.log('[FEATURES] Procesando customerId:', cleanCustomerId, 'Longitud:', cleanCustomerId.length);
       
       // Validar formato de ObjectId
       if (!ObjectId.isValid(cleanCustomerId)) {
-        console.error('[FEATURES] ❌ CustomerId no es un ObjectId válido:', cleanCustomerId);
         // Si no es válido, intentar con email si está disponible
         if (emailParam) {
-          console.log('[FEATURES] Intentando fallback con email del query...');
           const cleanEmail = emailParam.trim().toLowerCase();
           customer = await db.collection<Customer>('customers').findOne({
             email: cleanEmail,
           });
-          if (customer) {
-            console.log('[FEATURES] ✅ Cliente encontrado por email (fallback)');
-          } else {
-            console.log('[FEATURES] ❌ Cliente no encontrado por email del query');
-          }
         }
         
         // Si aún no se encontró, intentar desde las cookies del usuario
         if (!customer) {
           const userEmail = req.cookies?.email;
           if (userEmail) {
-            console.log('[FEATURES] Intentando buscar desde usuario en cookies:', userEmail);
             const user = await db.collection('users').findOne({
               email: userEmail.toLowerCase().trim(),
             });
@@ -426,133 +463,62 @@ router.get('/features', async (req: Request, res: Response) => {
               customer = await db.collection<Customer>('customers').findOne({
                 _id: new ObjectId(user.customerId),
               });
-              if (customer) {
-                console.log('[FEATURES] ✅ Cliente encontrado desde usuario en cookies');
-              }
             }
           }
         }
         
-        // Solo devolver error si realmente no se encontró nada
         if (!customer) {
           return res.status(400).json({
             success: false,
-            error: 'ID de cliente inválido y no se pudo encontrar cliente alternativo',
+            error: 'ID de cliente inválido',
           });
         }
       } else {
         // Buscar por customerId válido
-        try {
+        customer = await db.collection<Customer>('customers').findOne({
+          _id: new ObjectId(cleanCustomerId),
+        });
+        
+        // Si no se encuentra, intentar con email como fallback
+        if (!customer && emailParam) {
+          const cleanEmail = emailParam.trim().toLowerCase();
           customer = await db.collection<Customer>('customers').findOne({
-            _id: new ObjectId(cleanCustomerId),
+            email: cleanEmail,
           });
-          if (customer) {
-            console.log('[FEATURES] ✅ Cliente encontrado por customerId');
-          } else {
-            console.log('[FEATURES] ⚠️ CustomerId válido pero no encontrado en BD, intentando con email...');
-            // Si no se encuentra, intentar con email como fallback
-            if (emailParam) {
-              const cleanEmail = emailParam.trim().toLowerCase();
-              customer = await db.collection<Customer>('customers').findOne({
-                email: cleanEmail,
-              });
-              if (customer) {
-                console.log('[FEATURES] ✅ Cliente encontrado por email (fallback)');
-              }
-            }
-          }
-        } catch (error) {
-          console.error('[FEATURES] Error al buscar por customerId:', error);
-          // Intentar con email como fallback
-          if (emailParam) {
-            const cleanEmail = emailParam.trim().toLowerCase();
-            customer = await db.collection<Customer>('customers').findOne({
-              email: cleanEmail,
-            });
-          }
         }
       }
-    }
-    // Si no hay customerId, buscar por email
-    else if (emailParam) {
+    } else if (emailParam) {
+      // Buscar solo por email
       const cleanEmail = emailParam.trim().toLowerCase();
-      console.log('[FEATURES] Buscando solo por email:', cleanEmail);
       customer = await db.collection<Customer>('customers').findOne({
         email: cleanEmail,
       });
-      if (customer) {
-        console.log('[FEATURES] ✅ Cliente encontrado por email');
-      } else {
-        console.log('[FEATURES] ❌ Cliente no encontrado por email');
-      }
-    } else {
-      // Si no hay customerId ni email, intentar obtener del usuario actual desde las cookies
-      console.log('[FEATURES] No hay customerId ni email en query, intentando obtener del usuario actual...');
-      const userEmail = req.cookies?.email;
-      
-      if (userEmail) {
-        console.log('[FEATURES] Email de cookie:', userEmail);
-        // Buscar usuario primero para obtener su customerId
-        const user = await db.collection('users').findOne({
-          email: userEmail.toLowerCase().trim(),
-        });
-        
-        if (user && user.customerId) {
-          console.log('[FEATURES] Usuario encontrado, customerId:', user.customerId);
-          // Buscar customer usando el customerId del usuario
-          if (ObjectId.isValid(user.customerId)) {
-            customer = await db.collection<Customer>('customers').findOne({
-              _id: new ObjectId(user.customerId),
-            });
-            if (customer) {
-              console.log('[FEATURES] ✅ Cliente encontrado usando customerId del usuario');
-            }
-          }
-        }
-        
-        // Si aún no se encuentra, buscar directamente por email del usuario en customers
-        if (!customer) {
-          customer = await db.collection<Customer>('customers').findOne({
-            email: userEmail.toLowerCase().trim(),
-          });
-          if (customer) {
-            console.log('[FEATURES] ✅ Cliente encontrado por email del usuario');
-          }
-        }
-      }
-      
-      if (!customer) {
-        console.error('[FEATURES] ❌ No se proporcionó customerId ni email, y no se encontró usuario en cookies');
-        return res.status(400).json({
-          success: false,
-          error: 'Se requiere customerId o email',
-        });
-      }
     }
     
+    // Verificar que existe
     if (!customer) {
-      console.error('[FEATURES] ❌ Cliente no encontrado después de todas las búsquedas');
       return res.status(404).json({
         success: false,
         error: 'Cliente no encontrado',
       });
     }
-
-    console.log('[FEATURES] ✅ Cliente encontrado, ID:', customer._id?.toString(), 'Enabled views:', customer.enabledViews?.length || 0);
-
-    // Devolver las vistas/features habilitadas
+    
+    // Obtener vistas: usar enabledViews si existe y tiene elementos, sino usar defaults según plan
+    const enabledViews = customer.enabledViews && customer.enabledViews.length > 0
+      ? customer.enabledViews.filter(view => VALID_VIEWS.includes(view)) // Filtrar inválidos
+      : getDefaultViews(customer.planContratado || 'Básico');
+    
     return res.json({
       success: true,
       data: {
-        _id: customer._id?.toString(),
-        enabledViews: customer.enabledViews || [],
+        enabledViews: enabledViews,
       },
     });
   } catch (error) {
     console.error('[FEATURES] ❌ Error al obtener features del customer:', error);
     return res.status(500).json({
       success: false,
-      error: 'Error al obtener features',
+      error: 'Error interno del servidor',
     });
   }
 });
