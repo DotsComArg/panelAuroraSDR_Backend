@@ -50,7 +50,7 @@ router.get('/:userId', async (req: Request, res: Response) => {
     const db = await getMongoDb();
     const user = await db.collection<User>('users').findOne({
       _id: new ObjectId(userIdParam),
-    });
+    } as any);
 
     if (!user) {
       return res.status(404).json({

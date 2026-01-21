@@ -242,7 +242,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
 
     await db.collection<User>('users').deleteOne({
       _id: new ObjectId(userIdParam),
-    });
+    } as any);
 
     return res.json({
       success: true,
