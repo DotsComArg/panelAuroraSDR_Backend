@@ -483,38 +483,55 @@ router.get('/features', async (req: Request, res: Response) => {
           console.log('[FEATURES] Usuario encontrado:', {
             userId: user._id?.toString(),
             customerId: user.customerId,
+            customerIdType: typeof user.customerId,
+            customerIdIsObjectId: user.customerId instanceof ObjectId,
             role: user.role
           });
           
           if (user.customerId) {
-            // El customerId en users puede estar como string
-            let userCustomerId = user.customerId;
+            // El customerId en users puede estar como string o ObjectId
+            let userCustomerId: string;
             
-            // Si es un ObjectId, convertirlo a string
-            if (userCustomerId instanceof ObjectId) {
-              userCustomerId = userCustomerId.toString();
+            if (user.customerId instanceof ObjectId) {
+              userCustomerId = user.customerId.toString();
+            } else if (typeof user.customerId === 'string') {
+              userCustomerId = user.customerId.trim();
+            } else {
+              userCustomerId = String(user.customerId).trim();
             }
             
-            console.log('[FEATURES] CustomerId del usuario:', userCustomerId, 'Tipo:', typeof userCustomerId);
+            console.log('[FEATURES] CustomerId procesado:', userCustomerId, 'Longitud:', userCustomerId.length);
             
+            // Intentar buscar directamente con el string
             if (ObjectId.isValid(userCustomerId)) {
-              customer = await db.collection<Customer>('customers').findOne({
-                _id: new ObjectId(userCustomerId),
-              });
-              
-              if (customer) {
-                console.log('[FEATURES] ✅ Cliente encontrado desde usuario:', customer._id?.toString());
-              } else {
-                console.log('[FEATURES] ⚠️ CustomerId del usuario no existe en customers');
+              try {
+                customer = await db.collection<Customer>('customers').findOne({
+                  _id: new ObjectId(userCustomerId),
+                });
+                
+                if (customer) {
+                  console.log('[FEATURES] ✅ Cliente encontrado desde usuario:', customer._id?.toString());
+                } else {
+                  console.log('[FEATURES] ⚠️ CustomerId válido pero no encontrado en customers');
+                  
+                  // Intentar buscar todos los customers para debug
+                  const allCustomers = await db.collection<Customer>('customers').find({}).toArray();
+                  console.log('[FEATURES] Total customers en BD:', allCustomers.length);
+                  allCustomers.forEach(c => {
+                    console.log('[FEATURES]   - Customer ID:', c._id?.toString(), 'Email:', c.email);
+                  });
+                }
+              } catch (error) {
+                console.error('[FEATURES] Error al buscar customer con ObjectId:', error);
               }
             } else {
-              console.log('[FEATURES] ⚠️ CustomerId del usuario no es válido:', userCustomerId);
+              console.log('[FEATURES] ⚠️ CustomerId del usuario no es un ObjectId válido:', userCustomerId);
             }
           } else {
             console.log('[FEATURES] ⚠️ Usuario no tiene customerId asignado');
           }
         } else {
-          console.log('[FEATURES] ⚠️ Usuario no encontrado en BD');
+          console.log('[FEATURES] ⚠️ Usuario no encontrado en BD con email:', userEmail);
         }
       } catch (error) {
         console.error('[FEATURES] Error al buscar por usuario:', error);
@@ -538,6 +555,19 @@ router.get('/features', async (req: Request, res: Response) => {
     // Verificar que existe
     if (!customer) {
       console.error('[FEATURES] ❌ Cliente no encontrado después de todas las estrategias');
+      
+      // Debug: Listar todos los customers disponibles
+      try {
+        const allCustomers = await db.collection<Customer>('customers').find({}).toArray();
+        console.log('[FEATURES] DEBUG: Total customers en BD:', allCustomers.length);
+        allCustomers.forEach(c => {
+          const cId = c._id instanceof ObjectId ? c._id.toString() : String(c._id);
+          console.log('[FEATURES]   - Customer ID:', cId, 'Email:', c.email, 'Nombre:', c.nombre);
+        });
+      } catch (debugError) {
+        console.error('[FEATURES] Error al listar customers para debug:', debugError);
+      }
+      
       return res.status(404).json({
         success: false,
         error: 'Cliente no encontrado',

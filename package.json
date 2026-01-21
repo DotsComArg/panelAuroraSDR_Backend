@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
-    "migrate:features": "tsx scripts/migrate-features.ts"
+    "migrate:features": "tsx scripts/migrate-features.ts",
+    "diagnose:customerid": "tsx scripts/diagnose-customerid.ts"
   },
   "dependencies": {
     "@types/pg": "^8.11.4",
