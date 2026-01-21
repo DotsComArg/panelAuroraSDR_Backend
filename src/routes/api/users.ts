@@ -180,7 +180,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
     const db = await getMongoDb();
     const existingUser = await db.collection<User>('users').findOne({
       _id: new ObjectId(userIdParam),
-    });
+    } as any);
 
     if (!existingUser) {
       return res.status(404).json({
@@ -197,8 +197,8 @@ router.put('/:userId', async (req: Request, res: Response) => {
       // Verificar si el email ya está en uso por otro usuario
       const emailExists = await db.collection<User>('users').findOne({
         email: body.email.toLowerCase().trim(),
-        _id: { $ne: new ObjectId(userIdParam) },
-      });
+        _id: { $ne: new ObjectId(userIdParam) } as any,
+      } as any);
 
       if (emailExists) {
         return res.status(400).json({
@@ -235,7 +235,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
     }
 
     const result = await db.collection<User>('users').findOneAndUpdate(
-      { _id: new ObjectId(userIdParam) },
+      { _id: new ObjectId(userIdParam) } as any,
       { $set: updateData },
       { returnDocument: 'after' }
     );
@@ -272,7 +272,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
     const db = await getMongoDb();
     const user = await db.collection<User>('users').findOne({
       _id: new ObjectId(userIdParam),
-    });
+    } as any);
 
     if (!user) {
       return res.status(404).json({
@@ -283,7 +283,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
 
     await db.collection<User>('users').deleteOne({
       _id: new ObjectId(userIdParam),
-    });
+    } as any);
 
     return res.json({
       success: true,

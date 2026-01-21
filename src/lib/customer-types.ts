@@ -77,6 +77,8 @@ export interface CreateCustomerDto {
   };
   openAICredentials?: {
     apiKey: string; // API key sin encriptar (se encriptará al guardar)
+    organizationId?: string;
+    projectId?: string;
   };
 }
 

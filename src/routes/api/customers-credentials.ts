@@ -178,15 +178,16 @@ router.put('/', async (req: Request, res: Response) => {
     };
 
     if (body.kommo) {
+      const existingKommo = customer.kommoCredentials;
       updateData.kommoCredentials = {
-        baseUrl: body.kommo.baseUrl || customer.kommoCredentials?.baseUrl || '',
+        baseUrl: body.kommo.baseUrl || existingKommo?.baseUrl || '',
         accessToken: body.kommo.accessToken 
           ? encrypt(body.kommo.accessToken) 
-          : customer.kommoCredentials?.accessToken,
-        integrationId: body.kommo.integrationId || customer.kommoCredentials?.integrationId,
+          : (existingKommo?.accessToken || ''),
+        integrationId: body.kommo.integrationId || existingKommo?.integrationId,
         secretKey: body.kommo.secretKey 
           ? encrypt(body.kommo.secretKey) 
-          : customer.kommoCredentials?.secretKey,
+          : existingKommo?.secretKey,
       };
     }
 
@@ -204,8 +205,10 @@ router.put('/', async (req: Request, res: Response) => {
         apiKey: body.openAI.apiKey 
           ? encrypt(body.openAI.apiKey) 
           : (existingOpenAI?.apiKey || ''),
-        organizationId: body.openAI.organizationId || existingOpenAI?.organizationId,
-        projectId: body.openAI.projectId || existingOpenAI?.projectId,
+        ...(body.openAI.organizationId && { organizationId: body.openAI.organizationId }),
+        ...(body.openAI.projectId && { projectId: body.openAI.projectId }),
+        ...(existingOpenAI?.organizationId && !body.openAI.organizationId && { organizationId: existingOpenAI.organizationId }),
+        ...(existingOpenAI?.projectId && !body.openAI.projectId && { projectId: existingOpenAI.projectId }),
       };
     }
 
