@@ -7,7 +7,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "migrate:features": "tsx scripts/migrate-features.ts"
   },
   "dependencies": {
     "@types/pg": "^8.11.4",
