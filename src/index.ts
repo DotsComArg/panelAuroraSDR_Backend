@@ -31,14 +31,20 @@ app.use(cors({
       if (process.env.NODE_ENV !== 'production' && origin.includes('localhost')) {
         callback(null, true);
       } else {
-        callback(null, true); // Temporalmente permitir todos para debug
-        // callback(new Error('No permitido por CORS'));
+        // En producción, permitir dominios de Vercel
+        if (origin.includes('vercel.app') || origin.includes('localhost')) {
+          callback(null, true);
+        } else {
+          callback(null, true); // Temporalmente permitir todos para debug
+          // callback(new Error('No permitido por CORS'));
+        }
       }
     }
   },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
+  credentials: true, // CRÍTICO: Permite que las cookies se envíen
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'X-Requested-With'],
+  exposedHeaders: ['Set-Cookie'], // Exponer headers de cookies
 }));
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));

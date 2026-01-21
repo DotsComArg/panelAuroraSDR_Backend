@@ -89,21 +89,7 @@ router.post('/login', async (req: Request, res: Response) => {
     // Cookies de sesión
     const maxAge = remember ? 60 * 60 * 24 * 30 : 60 * 60 * 24; // 30 días o 1 día
 
-    res.cookie('email', user.email, {
-      path: '/',
-      maxAge: maxAge * 1000,
-      sameSite: 'lax',
-      httpOnly: false, // Necesario para que el frontend pueda leerlo
-    });
-
-    res.cookie('role', user.role, {
-      path: '/',
-      maxAge: maxAge * 1000,
-      sameSite: 'lax',
-      httpOnly: false,
-    });
-
-    // Establecer customerId en cookies (CRÍTICO: debe ser el del usuario)
+    // Configuración de cookies común
     const cookieOptions: any = {
       path: '/',
       maxAge: maxAge * 1000,
@@ -111,24 +97,34 @@ router.post('/login', async (req: Request, res: Response) => {
       httpOnly: false, // Necesario para que el frontend pueda leerlo
     };
     
-    // En producción, solo usar secure si estamos en HTTPS
-    // En Vercel, las cookies funcionan sin secure si el dominio es correcto
-    if (process.env.NODE_ENV === 'production' && req.secure) {
+    // En producción con HTTPS, usar secure
+    // En Vercel, verificar si la request viene de HTTPS
+    const isSecure = req.secure || 
+                     req.headers['x-forwarded-proto'] === 'https' ||
+                     process.env.NODE_ENV === 'production';
+    
+    if (isSecure) {
       cookieOptions.secure = true;
     }
-    
+
+    // Establecer userId PRIMERO (más confiable para identificar al usuario)
+    res.cookie('userId', user._id?.toString() || '', cookieOptions);
+    console.log(`[LOGIN] ✅ Cookie userId establecida: ${user._id?.toString()}`);
+
+    // Establecer email
+    res.cookie('email', user.email, cookieOptions);
+    console.log(`[LOGIN] ✅ Cookie email establecida: ${user.email}`);
+
+    // Establecer role
+    res.cookie('role', user.role, cookieOptions);
+    console.log(`[LOGIN] ✅ Cookie role establecida: ${user.role}`);
+
+    // Establecer customerId (CRÍTICO: debe ser el del usuario encontrado)
     res.cookie('customerId', customerId, cookieOptions);
     console.log(`[LOGIN] ✅ Cookie customerId establecida: ${customerId}`, {
       customerId,
       options: cookieOptions,
-      headers: res.getHeaders(),
-    });
-
-    res.cookie('userId', user._id?.toString() || '', {
-      path: '/',
-      maxAge: maxAge * 1000,
-      sameSite: 'lax',
-      httpOnly: false,
+      isSecure,
     });
 
     console.log(`[LOGIN] ✅ Login exitoso - Usuario: ${user.email}, Role: ${user.role}, CustomerId: ${customerId || 'N/A'}`);

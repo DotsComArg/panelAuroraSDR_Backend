@@ -310,6 +310,7 @@ router.get('/current', async (req: Request, res: Response) => {
   try {
     const db = await getMongoDb();
     let customer: Customer | null = null;
+    let user: any = null;
 
     // Debug: Ver todas las cookies y headers
     console.log('[CURRENT] Obteniendo cliente actual:', {
@@ -318,73 +319,97 @@ router.get('/current', async (req: Request, res: Response) => {
       userId: req.cookies?.userId,
       allCookies: req.cookies,
       cookieHeader: req.headers.cookie,
-      headers: {
-        'cookie': req.headers.cookie,
-        'x-forwarded-proto': req.headers['x-forwarded-proto'],
-        'host': req.headers.host,
-      }
     });
 
-    // Estrategia 1 (PREFERIDA): Buscar por usuario actual desde cookies para obtener su customerId
-    if (req.cookies?.email) {
+    // Estrategia 1 (MÁS CONFIABLE): Buscar por userId de las cookies
+    if (req.cookies?.userId) {
+      const userId = req.cookies.userId.trim();
+      console.log('[CURRENT] Intentando buscar por userId desde cookies:', userId);
+      
+      if (ObjectId.isValid(userId)) {
+        try {
+          user = await db.collection('users').findOne({
+            _id: new ObjectId(userId),
+          });
+          
+          if (user) {
+            console.log('[CURRENT] ✅ Usuario encontrado por userId:', {
+              userId: user._id?.toString(),
+              email: user.email,
+              customerId: user.customerId,
+              role: user.role
+            });
+          } else {
+            console.error('[CURRENT] ⚠️ Usuario no encontrado con userId:', userId);
+          }
+        } catch (error) {
+          console.error('[CURRENT] Error al buscar por userId:', error);
+        }
+      }
+    }
+
+    // Estrategia 2: Buscar por email de las cookies si no se encontró por userId
+    if (!user && req.cookies?.email) {
       const userEmail = req.cookies.email.toLowerCase().trim();
-      console.log('[CURRENT] Intentando buscar por usuario desde cookies:', userEmail);
+      console.log('[CURRENT] Intentando buscar por email desde cookies:', userEmail);
       
       try {
-        // Buscar usuario primero para obtener su customerId
-        const user = await db.collection('users').findOne({
+        user = await db.collection('users').findOne({
           email: userEmail,
         });
         
         if (user) {
-          console.log('[CURRENT] Usuario encontrado:', {
+          console.log('[CURRENT] ✅ Usuario encontrado por email:', {
             userId: user._id?.toString(),
+            email: user.email,
             customerId: user.customerId,
             role: user.role
           });
-          
-          if (user.customerId) {
-            // El customerId en users puede estar como string o ObjectId
-            let userCustomerId: string;
-            const userCustomerIdRaw = user.customerId as any;
-            
-            if (userCustomerIdRaw instanceof ObjectId) {
-              userCustomerId = userCustomerIdRaw.toString();
-            } else if (typeof userCustomerIdRaw === 'string') {
-              userCustomerId = userCustomerIdRaw.trim();
-            } else {
-              userCustomerId = String(userCustomerIdRaw).trim();
-            }
-            
-            console.log('[CURRENT] CustomerId del usuario:', userCustomerId);
-            
-            if (ObjectId.isValid(userCustomerId)) {
-              customer = await db.collection<Customer>('customers').findOne({
-                _id: new ObjectId(userCustomerId),
-              });
-              
-              if (customer) {
-                console.log('[CURRENT] ✅ Cliente encontrado desde usuario:', customer._id?.toString());
-              } else {
-                console.error('[CURRENT] ⚠️ CustomerId del usuario no existe en customers:', userCustomerId);
-              }
-            } else {
-              console.error('[CURRENT] ⚠️ CustomerId del usuario no es un ObjectId válido:', userCustomerId);
-            }
-          } else {
-            console.error('[CURRENT] ⚠️ Usuario no tiene customerId asignado');
-          }
         } else {
-          console.error('[CURRENT] ⚠️ Usuario no encontrado en BD con email:', userEmail);
+          console.error('[CURRENT] ⚠️ Usuario no encontrado con email:', userEmail);
         }
       } catch (error) {
-        console.error('[CURRENT] Error al buscar por usuario:', error);
+        console.error('[CURRENT] Error al buscar por email:', error);
       }
-    } else {
-      console.error('[CURRENT] ⚠️ No hay email en cookies');
     }
 
-    // Estrategia 2 (FALLBACK): Si no se encontró, buscar por customerId de las cookies
+    // Si encontramos el usuario, obtener su customerId y buscar el customer
+    if (user && user.customerId) {
+      let userCustomerId: string;
+      const userCustomerIdRaw = user.customerId as any;
+      
+      if (userCustomerIdRaw instanceof ObjectId) {
+        userCustomerId = userCustomerIdRaw.toString();
+      } else if (typeof userCustomerIdRaw === 'string') {
+        userCustomerId = userCustomerIdRaw.trim();
+      } else {
+        userCustomerId = String(userCustomerIdRaw).trim();
+      }
+      
+      console.log('[CURRENT] CustomerId del usuario:', userCustomerId);
+      
+      if (ObjectId.isValid(userCustomerId)) {
+        try {
+          customer = await db.collection<Customer>('customers').findOne({
+            _id: new ObjectId(userCustomerId),
+          });
+          
+          if (customer) {
+            console.log('[CURRENT] ✅ Cliente encontrado desde usuario:', customer._id?.toString());
+          } else {
+            console.error('[CURRENT] ⚠️ CustomerId del usuario no existe en customers:', userCustomerId);
+          }
+        } catch (error) {
+          console.error('[CURRENT] Error al buscar customer por customerId del usuario:', error);
+        }
+      } else {
+        console.error('[CURRENT] ⚠️ CustomerId del usuario no es un ObjectId válido:', userCustomerId);
+      }
+    } else if (user) {
+      console.error('[CURRENT] ⚠️ Usuario encontrado pero no tiene customerId asignado');
+    }
+
+    // Estrategia 3 (FALLBACK): Si no se encontró, buscar por customerId de las cookies directamente
     if (!customer && req.cookies?.customerId) {
       const cookieCustomerId = req.cookies.customerId.trim();
       console.log('[CURRENT] Fallback: Intentando buscar por customerId de cookies:', cookieCustomerId);
@@ -404,17 +429,21 @@ router.get('/current', async (req: Request, res: Response) => {
       }
     }
 
-    // Estrategia 3 (ÚLTIMO FALLBACK): Si no se encontró, buscar por email del usuario en customers directamente
+    // Estrategia 4 (ÚLTIMO FALLBACK): Si no se encontró, buscar por email del usuario en customers directamente
     if (!customer && req.cookies?.email) {
       const userEmail = req.cookies.email.toLowerCase().trim();
       console.log('[CURRENT] Último fallback: Intentando buscar customer directamente por email:', userEmail);
       
-      customer = await db.collection<Customer>('customers').findOne({
-        email: userEmail,
-      });
-      
-      if (customer) {
-        console.log('[CURRENT] ✅ Cliente encontrado por email del usuario (último fallback):', customer._id?.toString());
+      try {
+        customer = await db.collection<Customer>('customers').findOne({
+          email: userEmail,
+        });
+        
+        if (customer) {
+          console.log('[CURRENT] ✅ Cliente encontrado por email del usuario (último fallback):', customer._id?.toString());
+        }
+      } catch (error) {
+        console.error('[CURRENT] Error al buscar customer por email:', error);
       }
     }
 
