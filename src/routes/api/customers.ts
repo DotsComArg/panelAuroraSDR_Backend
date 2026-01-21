@@ -321,9 +321,11 @@ router.get('/features/list', async (req: Request, res: Response) => {
 });
 
 // Helper para obtener parámetro de query como string
-const getQueryParam = (param: string | string[] | undefined): string | null => {
+const getQueryParam = (param: any): string | null => {
   if (!param) return null;
-  return Array.isArray(param) ? param[0] : param;
+  if (Array.isArray(param)) return param[0] || null;
+  if (typeof param === 'string') return param;
+  return null;
 };
 
 // Obtener features habilitadas de un customer específico
