@@ -320,19 +320,26 @@ router.get('/features/list', async (req: Request, res: Response) => {
   }
 });
 
+// Helper para obtener parámetro de query como string
+const getQueryParam = (param: string | string[] | undefined): string | null => {
+  if (!param) return null;
+  return Array.isArray(param) ? param[0] : param;
+};
+
 // Obtener features habilitadas de un customer específico
 router.get('/features', async (req: Request, res: Response) => {
   try {
-    const { customerId, email } = req.query;
+    const customerIdParam = getQueryParam(req.query.customerId);
+    const emailParam = getQueryParam(req.query.email);
     
     const db = await getMongoDb();
     let customer: Customer | null = null;
 
     // Buscar por customerId
-    if (customerId && typeof customerId === 'string') {
-      if (ObjectId.isValid(customerId)) {
+    if (customerIdParam) {
+      if (ObjectId.isValid(customerIdParam)) {
         customer = await db.collection<Customer>('customers').findOne({
-          _id: new ObjectId(customerId),
+          _id: new ObjectId(customerIdParam),
         });
       } else {
         return res.status(400).json({
@@ -342,9 +349,14 @@ router.get('/features', async (req: Request, res: Response) => {
       }
     }
     // Buscar por email
-    else if (email && typeof email === 'string') {
+    else if (emailParam) {
       customer = await db.collection<Customer>('customers').findOne({
-        email: email.toLowerCase().trim(),
+        email: emailParam.toLowerCase().trim(),
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Se requiere customerId o email',
       });
     }
     
