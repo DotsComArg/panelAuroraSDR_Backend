@@ -43,7 +43,15 @@ app.use(cors({
   },
   credentials: true, // CRÍTICO: Permite que las cookies se envíen
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'X-Requested-With'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'Cookie', 
+    'X-Requested-With',
+    'x-user-id',        // Header personalizado para autenticación
+    'x-customer-id',    // Header personalizado para autenticación
+    'x-user-email',     // Header personalizado para autenticación
+  ],
   exposedHeaders: ['Set-Cookie'], // Exponer headers de cookies
 }));
 app.use(cookieParser());
