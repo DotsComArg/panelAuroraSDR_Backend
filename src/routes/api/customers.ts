@@ -314,28 +314,8 @@ router.get('/current', async (req: Request, res: Response) => {
       userId: req.cookies?.userId
     });
 
-    // Estrategia 1: Buscar por customerId de las cookies
-    if (req.cookies?.customerId) {
-      const cookieCustomerId = req.cookies.customerId.trim();
-      console.log('[CURRENT] Intentando buscar por customerId de cookies:', cookieCustomerId);
-      
-      if (ObjectId.isValid(cookieCustomerId)) {
-        try {
-          customer = await db.collection<Customer>('customers').findOne({
-            _id: new ObjectId(cookieCustomerId),
-          });
-          
-          if (customer) {
-            console.log('[CURRENT] ✅ Cliente encontrado por customerId de cookies:', customer._id?.toString());
-          }
-        } catch (error) {
-          console.error('[CURRENT] Error al buscar por customerId de cookies:', error);
-        }
-      }
-    }
-
-    // Estrategia 2: Si no se encontró, buscar por usuario actual desde cookies
-    if (!customer && req.cookies?.email) {
+    // Estrategia 1 (PREFERIDA): Buscar por usuario actual desde cookies para obtener su customerId
+    if (req.cookies?.email) {
       const userEmail = req.cookies.email.toLowerCase().trim();
       console.log('[CURRENT] Intentando buscar por usuario desde cookies:', userEmail);
       
@@ -374,31 +354,61 @@ router.get('/current', async (req: Request, res: Response) => {
               
               if (customer) {
                 console.log('[CURRENT] ✅ Cliente encontrado desde usuario:', customer._id?.toString());
+              } else {
+                console.error('[CURRENT] ⚠️ CustomerId del usuario no existe en customers:', userCustomerId);
               }
+            } else {
+              console.error('[CURRENT] ⚠️ CustomerId del usuario no es un ObjectId válido:', userCustomerId);
             }
+          } else {
+            console.error('[CURRENT] ⚠️ Usuario no tiene customerId asignado');
           }
+        } else {
+          console.error('[CURRENT] ⚠️ Usuario no encontrado en BD con email:', userEmail);
         }
       } catch (error) {
         console.error('[CURRENT] Error al buscar por usuario:', error);
       }
+    } else {
+      console.error('[CURRENT] ⚠️ No hay email en cookies');
     }
 
-    // Estrategia 3: Si no se encontró, buscar por email del usuario en customers directamente
+    // Estrategia 2 (FALLBACK): Si no se encontró, buscar por customerId de las cookies
+    if (!customer && req.cookies?.customerId) {
+      const cookieCustomerId = req.cookies.customerId.trim();
+      console.log('[CURRENT] Fallback: Intentando buscar por customerId de cookies:', cookieCustomerId);
+      
+      if (ObjectId.isValid(cookieCustomerId)) {
+        try {
+          customer = await db.collection<Customer>('customers').findOne({
+            _id: new ObjectId(cookieCustomerId),
+          });
+          
+          if (customer) {
+            console.log('[CURRENT] ✅ Cliente encontrado por customerId de cookies (fallback):', customer._id?.toString());
+          }
+        } catch (error) {
+          console.error('[CURRENT] Error al buscar por customerId de cookies:', error);
+        }
+      }
+    }
+
+    // Estrategia 3 (ÚLTIMO FALLBACK): Si no se encontró, buscar por email del usuario en customers directamente
     if (!customer && req.cookies?.email) {
       const userEmail = req.cookies.email.toLowerCase().trim();
-      console.log('[CURRENT] Intentando buscar customer directamente por email:', userEmail);
+      console.log('[CURRENT] Último fallback: Intentando buscar customer directamente por email:', userEmail);
       
       customer = await db.collection<Customer>('customers').findOne({
         email: userEmail,
       });
       
       if (customer) {
-        console.log('[CURRENT] ✅ Cliente encontrado por email del usuario:', customer._id?.toString());
+        console.log('[CURRENT] ✅ Cliente encontrado por email del usuario (último fallback):', customer._id?.toString());
       }
     }
 
     if (!customer) {
-      console.error('[CURRENT] ❌ Cliente no encontrado para el usuario actual');
+      console.error('[CURRENT] ❌ Cliente no encontrado para el usuario actual después de todas las estrategias');
       return res.status(404).json({
         success: false,
         error: 'Cliente no encontrado',

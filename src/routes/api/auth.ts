@@ -65,7 +65,7 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // Obtener customerId correctamente
+    // Obtener customerId del usuario (CRÍTICO: debe ser del usuario encontrado)
     let customerId: string | undefined = undefined;
     
     if (user.customerId) {
@@ -76,18 +76,14 @@ router.post('/login', async (req: Request, res: Response) => {
       } else {
         customerId = String(userCustomerId).trim();
       }
-      console.log(`[LOGIN] CustomerId obtenido del usuario: ${customerId}`);
+      console.log(`[LOGIN] ✅ CustomerId obtenido del usuario: ${customerId}`);
     } else {
-      // Si el usuario no tiene customerId pero es Cliente, intentar buscarlo por email del customer
-      if (user.role === 'Cliente') {
-        console.log(`[LOGIN] Usuario no tiene customerId, buscando por email del customer: ${email}`);
-        const customer = await db.collection('customers').findOne({ email: email });
-        if (customer && customer._id) {
-          const customerIdObj = customer._id as any;
-          customerId = customerIdObj instanceof ObjectId ? customerIdObj.toString() : String(customerIdObj);
-          console.log(`[LOGIN] CustomerId encontrado desde customer: ${customerId}`);
-        }
-      }
+      // Si el usuario no tiene customerId, es un error
+      console.error(`[LOGIN] ❌ Usuario no tiene customerId asociado: ${user.email}`);
+      return res.status(400).json({
+        success: false,
+        error: 'Usuario no tiene un cliente asociado',
+      });
     }
 
     // Cookies de sesión
@@ -107,17 +103,15 @@ router.post('/login', async (req: Request, res: Response) => {
       httpOnly: false,
     });
 
-    if (customerId) {
-      res.cookie('customerId', customerId, {
-        path: '/',
-        maxAge: maxAge * 1000,
-        sameSite: 'lax',
-        httpOnly: false,
-      });
-      console.log(`[LOGIN] Cookie customerId establecida: ${customerId}`);
-    } else {
-      console.log(`[LOGIN] ⚠️ No se estableció cookie customerId (usuario: ${user.email}, role: ${user.role})`);
-    }
+    // Establecer customerId en cookies (CRÍTICO: debe ser el del usuario)
+    res.cookie('customerId', customerId, {
+      path: '/',
+      maxAge: maxAge * 1000,
+      sameSite: 'lax',
+      httpOnly: false, // Necesario para que el frontend pueda leerlo
+      secure: process.env.NODE_ENV === 'production',
+    });
+    console.log(`[LOGIN] ✅ Cookie customerId establecida: ${customerId}`);
 
     res.cookie('userId', user._id?.toString() || '', {
       path: '/',
