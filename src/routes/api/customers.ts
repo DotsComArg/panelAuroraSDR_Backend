@@ -342,6 +342,132 @@ router.get('/:customerId', async (req: Request, res: Response) => {
   }
 });
 
+// Obtener customer actual del usuario logueado
+router.get('/current', async (req: Request, res: Response) => {
+  try {
+    const db = await getMongoDb();
+    let customer: Customer | null = null;
+
+    console.log('[CURRENT] Obteniendo cliente actual:', {
+      email: req.cookies?.email,
+      customerId: req.cookies?.customerId,
+      userId: req.cookies?.userId
+    });
+
+    // Estrategia 1: Buscar por customerId de las cookies
+    if (req.cookies?.customerId) {
+      const cookieCustomerId = req.cookies.customerId.trim();
+      console.log('[CURRENT] Intentando buscar por customerId de cookies:', cookieCustomerId);
+      
+      if (ObjectId.isValid(cookieCustomerId)) {
+        try {
+          customer = await db.collection<Customer>('customers').findOne({
+            _id: new ObjectId(cookieCustomerId),
+          });
+          
+          if (customer) {
+            console.log('[CURRENT] ✅ Cliente encontrado por customerId de cookies:', customer._id?.toString());
+          }
+        } catch (error) {
+          console.error('[CURRENT] Error al buscar por customerId de cookies:', error);
+        }
+      }
+    }
+
+    // Estrategia 2: Si no se encontró, buscar por usuario actual desde cookies
+    if (!customer && req.cookies?.email) {
+      const userEmail = req.cookies.email.toLowerCase().trim();
+      console.log('[CURRENT] Intentando buscar por usuario desde cookies:', userEmail);
+      
+      try {
+        // Buscar usuario primero para obtener su customerId
+        const user = await db.collection('users').findOne({
+          email: userEmail,
+        });
+        
+        if (user) {
+          console.log('[CURRENT] Usuario encontrado:', {
+            userId: user._id?.toString(),
+            customerId: user.customerId,
+            role: user.role
+          });
+          
+          if (user.customerId) {
+            // El customerId en users puede estar como string o ObjectId
+            let userCustomerId: string;
+            const userCustomerIdRaw = user.customerId as any;
+            
+            if (userCustomerIdRaw instanceof ObjectId) {
+              userCustomerId = userCustomerIdRaw.toString();
+            } else if (typeof userCustomerIdRaw === 'string') {
+              userCustomerId = userCustomerIdRaw.trim();
+            } else {
+              userCustomerId = String(userCustomerIdRaw).trim();
+            }
+            
+            console.log('[CURRENT] CustomerId del usuario:', userCustomerId);
+            
+            if (ObjectId.isValid(userCustomerId)) {
+              customer = await db.collection<Customer>('customers').findOne({
+                _id: new ObjectId(userCustomerId),
+              });
+              
+              if (customer) {
+                console.log('[CURRENT] ✅ Cliente encontrado desde usuario:', customer._id?.toString());
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[CURRENT] Error al buscar por usuario:', error);
+      }
+    }
+
+    // Estrategia 3: Si no se encontró, buscar por email del usuario en customers directamente
+    if (!customer && req.cookies?.email) {
+      const userEmail = req.cookies.email.toLowerCase().trim();
+      console.log('[CURRENT] Intentando buscar customer directamente por email:', userEmail);
+      
+      customer = await db.collection<Customer>('customers').findOne({
+        email: userEmail,
+      });
+      
+      if (customer) {
+        console.log('[CURRENT] ✅ Cliente encontrado por email del usuario:', customer._id?.toString());
+      }
+    }
+
+    if (!customer) {
+      console.error('[CURRENT] ❌ Cliente no encontrado para el usuario actual');
+      return res.status(404).json({
+        success: false,
+        error: 'Cliente no encontrado',
+      });
+    }
+
+    console.log('[CURRENT] ✅ Cliente actual:', {
+      id: customer._id?.toString(),
+      nombre: customer.nombre,
+      apellido: customer.apellido,
+      email: customer.email
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        ...customer,
+        _id: customer._id?.toString(),
+      },
+    });
+  } catch (error) {
+    console.error('[CURRENT] ❌ Error al obtener cliente actual:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al obtener cliente',
+    });
+  }
+});
+
 // Buscar customer por email
 router.get('/by-email', async (req: Request, res: Response) => {
   try {
