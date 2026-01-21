@@ -1,0 +1,295 @@
+import { Router, Request, Response } from 'express';
+import { ObjectId } from 'mongodb';
+import { getMongoDb } from '../../lib/mongodb.js';
+import type { User } from '../../lib/types.js';
+import { hashPassword } from '../../lib/auth-utils.js';
+
+const router = Router();
+
+// Listar todos los usuarios
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const db = await getMongoDb();
+    const users = await db.collection<User>('users').find({}).toArray();
+    
+    return res.json({
+      success: true,
+      data: users.map(u => ({
+        ...u,
+        _id: u._id?.toString(),
+        passwordHash: undefined, // No enviar el hash de contraseña
+      })),
+    });
+  } catch (error) {
+    console.error('Error al obtener usuarios:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al obtener usuarios',
+    });
+  }
+});
+
+// Obtener usuario por ID
+router.get('/:userId', async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de usuario inválido',
+      });
+    }
+
+    const db = await getMongoDb();
+    const user = await db.collection<User>('users').findOne({
+      _id: new ObjectId(userId),
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'Usuario no encontrado',
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        ...user,
+        _id: user._id?.toString(),
+        passwordHash: undefined,
+      },
+    });
+  } catch (error) {
+    console.error('Error al obtener usuario:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al obtener usuario',
+    });
+  }
+});
+
+// Crear nuevo usuario
+router.post('/', async (req: Request, res: Response) => {
+  try {
+    const body = req.body as {
+      email: string;
+      name: string;
+      password: string;
+      role?: 'SuperAdmin' | 'Cliente';
+      customerId?: string;
+    };
+    
+    if (!body.email || !body.name || !body.password) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email, nombre y contraseña son requeridos',
+      });
+    }
+
+    const db = await getMongoDb();
+    
+    // Verificar si ya existe un usuario con ese email
+    const existing = await db.collection<User>('users').findOne({
+      email: body.email.toLowerCase().trim(),
+    });
+
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        error: 'Ya existe un usuario con ese email',
+      });
+    }
+
+    // Si tiene customerId, verificar que el customer existe
+    if (body.customerId) {
+      if (!ObjectId.isValid(body.customerId)) {
+        return res.status(400).json({
+          success: false,
+          error: 'ID de cliente inválido',
+        });
+      }
+
+      const customer = await db.collection('customers').findOne({
+        _id: new ObjectId(body.customerId),
+      });
+
+      if (!customer) {
+        return res.status(404).json({
+          success: false,
+          error: 'Cliente no encontrado',
+        });
+      }
+    }
+
+    const user: User = {
+      email: body.email.toLowerCase().trim(),
+      name: body.name,
+      role: body.role || 'Cliente',
+      customerId: body.customerId,
+      passwordHash: hashPassword(body.password),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const result = await db.collection<User>('users').insertOne(user);
+
+    return res.status(201).json({
+      success: true,
+      data: {
+        ...user,
+        _id: result.insertedId.toString(),
+        passwordHash: undefined,
+      },
+    });
+  } catch (error) {
+    console.error('Error al crear usuario:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al crear usuario',
+    });
+  }
+});
+
+// Actualizar usuario
+router.put('/:userId', async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const body = req.body as {
+      email?: string;
+      name?: string;
+      password?: string;
+      role?: 'SuperAdmin' | 'Cliente';
+      customerId?: string;
+    };
+    
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de usuario inválido',
+      });
+    }
+
+    const db = await getMongoDb();
+    const existingUser = await db.collection<User>('users').findOne({
+      _id: new ObjectId(userId),
+    });
+
+    if (!existingUser) {
+      return res.status(404).json({
+        success: false,
+        error: 'Usuario no encontrado',
+      });
+    }
+
+    const updateData: Partial<User> = {
+      updatedAt: new Date(),
+    };
+
+    if (body.email) {
+      // Verificar si el email ya está en uso por otro usuario
+      const emailExists = await db.collection<User>('users').findOne({
+        email: body.email.toLowerCase().trim(),
+        _id: { $ne: new ObjectId(userId) },
+      });
+
+      if (emailExists) {
+        return res.status(400).json({
+          success: false,
+          error: 'Ya existe un usuario con ese email',
+        });
+      }
+      updateData.email = body.email.toLowerCase().trim();
+    }
+    if (body.name) updateData.name = body.name;
+    if (body.password) updateData.passwordHash = hashPassword(body.password);
+    if (body.role) updateData.role = body.role;
+    if (body.customerId !== undefined) {
+      if (body.customerId) {
+        if (!ObjectId.isValid(body.customerId)) {
+          return res.status(400).json({
+            success: false,
+            error: 'ID de cliente inválido',
+          });
+        }
+
+        const customer = await db.collection('customers').findOne({
+          _id: new ObjectId(body.customerId),
+        });
+
+        if (!customer) {
+          return res.status(404).json({
+            success: false,
+            error: 'Cliente no encontrado',
+          });
+        }
+      }
+      updateData.customerId = body.customerId;
+    }
+
+    const result = await db.collection<User>('users').findOneAndUpdate(
+      { _id: new ObjectId(userId) },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        ...result,
+        _id: result?._id?.toString(),
+        passwordHash: undefined,
+      },
+    });
+  } catch (error) {
+    console.error('Error al actualizar usuario:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al actualizar usuario',
+    });
+  }
+});
+
+// Eliminar usuario
+router.delete('/:userId', async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de usuario inválido',
+      });
+    }
+
+    const db = await getMongoDb();
+    const user = await db.collection<User>('users').findOne({
+      _id: new ObjectId(userId),
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'Usuario no encontrado',
+      });
+    }
+
+    await db.collection<User>('users').deleteOne({
+      _id: new ObjectId(userId),
+    });
+
+    return res.json({
+      success: true,
+      message: 'Usuario eliminado correctamente',
+    });
+  } catch (error) {
+    console.error('Error al eliminar usuario:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al eliminar usuario',
+    });
+  }
+});
+
+export default router;
