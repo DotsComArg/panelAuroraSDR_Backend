@@ -402,7 +402,7 @@ router.get('/features', async (req: Request, res: Response) => {
         console.error('[FEATURES] ❌ CustomerId no es un ObjectId válido:', cleanCustomerId);
         // Si no es válido, intentar con email si está disponible
         if (emailParam) {
-          console.log('[FEATURES] Intentando fallback con email...');
+          console.log('[FEATURES] Intentando fallback con email del query...');
           const cleanEmail = emailParam.trim().toLowerCase();
           customer = await db.collection<Customer>('customers').findOne({
             email: cleanEmail,
@@ -410,12 +410,34 @@ router.get('/features', async (req: Request, res: Response) => {
           if (customer) {
             console.log('[FEATURES] ✅ Cliente encontrado por email (fallback)');
           } else {
-            console.log('[FEATURES] ❌ Cliente no encontrado por email');
+            console.log('[FEATURES] ❌ Cliente no encontrado por email del query');
           }
-        } else {
+        }
+        
+        // Si aún no se encontró, intentar desde las cookies del usuario
+        if (!customer) {
+          const userEmail = req.cookies?.email;
+          if (userEmail) {
+            console.log('[FEATURES] Intentando buscar desde usuario en cookies:', userEmail);
+            const user = await db.collection('users').findOne({
+              email: userEmail.toLowerCase().trim(),
+            });
+            if (user && user.customerId && ObjectId.isValid(user.customerId)) {
+              customer = await db.collection<Customer>('customers').findOne({
+                _id: new ObjectId(user.customerId),
+              });
+              if (customer) {
+                console.log('[FEATURES] ✅ Cliente encontrado desde usuario en cookies');
+              }
+            }
+          }
+        }
+        
+        // Solo devolver error si realmente no se encontró nada
+        if (!customer) {
           return res.status(400).json({
             success: false,
-            error: 'ID de cliente inválido',
+            error: 'ID de cliente inválido y no se pudo encontrar cliente alternativo',
           });
         }
       } else {
