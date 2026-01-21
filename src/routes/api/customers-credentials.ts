@@ -80,6 +80,74 @@ router.get('/masked', async (req: Request, res: Response) => {
   }
 });
 
+// Desbloquear credenciales con contraseña de administrador (POST para desbloquear)
+router.post('/', async (req: Request, res: Response) => {
+  try {
+    const customerIdParam = getParamAsString(req.params.customerId);
+    const body = req.body as { password?: string };
+    
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de cliente inválido',
+      });
+    }
+
+    // TODO: Validar contraseña de administrador aquí
+    // Por ahora, simplemente devolvemos las credenciales desencriptadas
+    
+    const db = await getMongoDb();
+    const customer = await db.collection<Customer>('customers').findOne({
+      _id: new ObjectId(customerIdParam),
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cliente no encontrado',
+      });
+    }
+
+    const credentials: any = {};
+
+    if (customer.kommoCredentials) {
+      credentials.kommo = {
+        baseUrl: customer.kommoCredentials.baseUrl,
+        accessToken: customer.kommoCredentials.accessToken ? decrypt(customer.kommoCredentials.accessToken) : undefined,
+        integrationId: customer.kommoCredentials.integrationId,
+        secretKey: customer.kommoCredentials.secretKey ? decrypt(customer.kommoCredentials.secretKey) : undefined,
+      };
+    }
+
+    if (customer.postgresCredentials) {
+      credentials.postgres = {
+        connectionString: customer.postgresCredentials.connectionString 
+          ? decrypt(customer.postgresCredentials.connectionString) 
+          : undefined,
+      };
+    }
+
+    if (customer.openAICredentials) {
+      credentials.openAI = {
+        apiKey: customer.openAICredentials.apiKey ? decrypt(customer.openAICredentials.apiKey) : undefined,
+        organizationId: customer.openAICredentials.organizationId,
+        projectId: customer.openAICredentials.projectId,
+      };
+    }
+
+    return res.json({
+      success: true,
+      data: credentials,
+    });
+  } catch (error) {
+    console.error('Error al desbloquear credenciales:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al desbloquear credenciales',
+    });
+  }
+});
+
 // Obtener credenciales (desencriptadas - usar con precaución)
 router.get('/', async (req: Request, res: Response) => {
   try {

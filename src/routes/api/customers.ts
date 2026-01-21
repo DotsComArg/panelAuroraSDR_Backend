@@ -292,6 +292,53 @@ router.put('/:customerId', async (req: Request, res: Response) => {
   }
 });
 
+// Eliminar customer
+router.delete('/:customerId', async (req: Request, res: Response) => {
+  try {
+    const customerIdParam = getParamAsString(req.params.customerId);
+    
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de cliente inválido',
+      });
+    }
+
+    const db = await getMongoDb();
+    const customer = await db.collection<Customer>('customers').findOne({
+      _id: new ObjectId(customerIdParam),
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cliente no encontrado',
+      });
+    }
+
+    // Eliminar el customer
+    await db.collection<Customer>('customers').deleteOne({
+      _id: new ObjectId(customerIdParam),
+    });
+
+    // También eliminar usuarios asociados
+    await db.collection('users').deleteMany({
+      customerId: customerIdParam,
+    });
+
+    return res.json({
+      success: true,
+      message: 'Cliente eliminado correctamente',
+    });
+  } catch (error) {
+    console.error('Error al eliminar customer:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al eliminar cliente',
+    });
+  }
+});
+
 // Obtener lista de features disponibles
 router.get('/features/list', async (req: Request, res: Response) => {
   try {
