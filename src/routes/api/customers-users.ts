@@ -6,12 +6,18 @@ import { hashPassword } from '../../lib/auth-utils.js';
 
 const router = Router({ mergeParams: true });
 
+// Helper para convertir parámetros a string
+const getParamAsString = (param: string | string[] | undefined): string | null => {
+  if (!param) return null;
+  return Array.isArray(param) ? param[0] : param;
+};
+
 // Obtener usuarios de un customer
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const { customerId } = req.params;
+    const customerIdParam = getParamAsString(req.params.customerId);
     
-    if (!ObjectId.isValid(customerId)) {
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de cliente inválido',
@@ -20,7 +26,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     const db = await getMongoDb();
     const users = await db.collection<User>('users')
-      .find({ customerId: customerId })
+      .find({ customerId: customerIdParam })
       .toArray();
 
     return res.json({
@@ -43,7 +49,7 @@ router.get('/', async (req: Request, res: Response) => {
 // Crear usuario para un customer
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { customerId } = req.params;
+    const customerIdParam = getParamAsString(req.params.customerId);
     const body = req.body as {
       email: string;
       name: string;
@@ -52,7 +58,7 @@ router.post('/', async (req: Request, res: Response) => {
       isActive?: boolean;
     };
     
-    if (!ObjectId.isValid(customerId)) {
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de cliente inválido',
@@ -70,7 +76,7 @@ router.post('/', async (req: Request, res: Response) => {
     
     // Verificar que el customer existe
     const customer = await db.collection('customers').findOne({
-      _id: new ObjectId(customerId),
+      _id: new ObjectId(customerIdParam),
     });
 
     if (!customer) {
@@ -96,7 +102,7 @@ router.post('/', async (req: Request, res: Response) => {
       email: body.email.toLowerCase().trim(),
       name: body.name,
       role: 'Cliente',
-      customerId: customerId,
+      customerId: customerIdParam,
       customerRole: body.customerRole || 'Employee',
       isActive: body.isActive !== undefined ? body.isActive : true,
       passwordHash: hashPassword(body.password),
@@ -126,7 +132,8 @@ router.post('/', async (req: Request, res: Response) => {
 // Actualizar usuario de un customer
 router.put('/:userId', async (req: Request, res: Response) => {
   try {
-    const { customerId, userId } = req.params;
+    const customerIdParam = getParamAsString(req.params.customerId);
+    const userIdParam = getParamAsString(req.params.userId);
     const body = req.body as {
       email?: string;
       name?: string;
@@ -135,7 +142,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
       isActive?: boolean;
     };
     
-    if (!ObjectId.isValid(customerId) || !ObjectId.isValid(userId)) {
+    if (!customerIdParam || !userIdParam || !ObjectId.isValid(customerIdParam) || !ObjectId.isValid(userIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID inválido',
@@ -146,8 +153,8 @@ router.put('/:userId', async (req: Request, res: Response) => {
     
     // Verificar que el usuario pertenece al customer
     const existingUser = await db.collection<User>('users').findOne({
-      _id: new ObjectId(userId),
-      customerId: customerId,
+      _id: new ObjectId(userIdParam),
+      customerId: customerIdParam,
     });
 
     if (!existingUser) {
@@ -171,7 +178,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
     if (body.email && body.email !== existingUser.email) {
       const emailExists = await db.collection<User>('users').findOne({
         email: body.email.toLowerCase().trim(),
-        _id: { $ne: new ObjectId(userId) },
+        _id: { $ne: new ObjectId(userIdParam) },
       });
 
       if (emailExists) {
@@ -183,7 +190,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
     }
 
     const result = await db.collection<User>('users').findOneAndUpdate(
-      { _id: new ObjectId(userId), customerId: customerId },
+      { _id: new ObjectId(userIdParam), customerId: customerIdParam },
       { $set: updateData },
       { returnDocument: 'after' }
     );
@@ -208,9 +215,10 @@ router.put('/:userId', async (req: Request, res: Response) => {
 // Eliminar usuario de un customer
 router.delete('/:userId', async (req: Request, res: Response) => {
   try {
-    const { customerId, userId } = req.params;
+    const customerIdParam = getParamAsString(req.params.customerId);
+    const userIdParam = getParamAsString(req.params.userId);
     
-    if (!ObjectId.isValid(customerId) || !ObjectId.isValid(userId)) {
+    if (!customerIdParam || !userIdParam || !ObjectId.isValid(customerIdParam) || !ObjectId.isValid(userIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID inválido',
@@ -221,8 +229,8 @@ router.delete('/:userId', async (req: Request, res: Response) => {
     
     // Verificar que el usuario pertenece al customer
     const user = await db.collection<User>('users').findOne({
-      _id: new ObjectId(userId),
-      customerId: customerId,
+      _id: new ObjectId(userIdParam),
+      customerId: customerIdParam,
     });
 
     if (!user) {
@@ -233,7 +241,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
     }
 
     await db.collection<User>('users').deleteOne({
-      _id: new ObjectId(userId),
+      _id: new ObjectId(userIdParam),
     });
 
     return res.json({

@@ -6,12 +6,18 @@ import { encrypt, decrypt } from '../../lib/encryption-utils.js';
 
 const router = Router({ mergeParams: true });
 
+// Helper para convertir parámetros a string
+const getParamAsString = (param: string | string[] | undefined): string | null => {
+  if (!param) return null;
+  return Array.isArray(param) ? param[0] : param;
+};
+
 // Obtener credenciales enmascaradas
 router.get('/masked', async (req: Request, res: Response) => {
   try {
-    const { customerId } = req.params;
+    const customerIdParam = getParamAsString(req.params.customerId);
     
-    if (!ObjectId.isValid(customerId)) {
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de cliente inválido',
@@ -20,7 +26,7 @@ router.get('/masked', async (req: Request, res: Response) => {
 
     const db = await getMongoDb();
     const customer = await db.collection<Customer>('customers').findOne({
-      _id: new ObjectId(customerId),
+      _id: new ObjectId(customerIdParam),
     });
 
     if (!customer) {
@@ -77,9 +83,9 @@ router.get('/masked', async (req: Request, res: Response) => {
 // Obtener credenciales (desencriptadas - usar con precaución)
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const { customerId } = req.params;
+    const customerIdParam = getParamAsString(req.params.customerId);
     
-    if (!ObjectId.isValid(customerId)) {
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de cliente inválido',
@@ -88,7 +94,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     const db = await getMongoDb();
     const customer = await db.collection<Customer>('customers').findOne({
-      _id: new ObjectId(customerId),
+      _id: new ObjectId(customerIdParam),
     });
 
     if (!customer) {
@@ -141,14 +147,14 @@ router.get('/', async (req: Request, res: Response) => {
 // Actualizar credenciales
 router.put('/', async (req: Request, res: Response) => {
   try {
-    const { customerId } = req.params;
+    const customerIdParam = getParamAsString(req.params.customerId);
     const body = req.body as {
       kommo?: any;
       postgres?: any;
       openAI?: any;
     };
     
-    if (!ObjectId.isValid(customerId)) {
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de cliente inválido',
@@ -157,7 +163,7 @@ router.put('/', async (req: Request, res: Response) => {
 
     const db = await getMongoDb();
     const customer = await db.collection<Customer>('customers').findOne({
-      _id: new ObjectId(customerId),
+      _id: new ObjectId(customerIdParam),
     });
 
     if (!customer) {
@@ -188,22 +194,23 @@ router.put('/', async (req: Request, res: Response) => {
       updateData.postgresCredentials = {
         connectionString: body.postgres.connectionString 
           ? encrypt(body.postgres.connectionString) 
-          : customer.postgresCredentials?.connectionString || '',
+          : (customer.postgresCredentials?.connectionString || ''),
       };
     }
 
     if (body.openAI) {
+      const existingOpenAI = customer.openAICredentials;
       updateData.openAICredentials = {
         apiKey: body.openAI.apiKey 
           ? encrypt(body.openAI.apiKey) 
-          : customer.openAICredentials?.apiKey,
-        organizationId: body.openAI.organizationId || customer.openAICredentials?.organizationId,
-        projectId: body.openAI.projectId || customer.openAICredentials?.projectId,
+          : (existingOpenAI?.apiKey || ''),
+        organizationId: body.openAI.organizationId || existingOpenAI?.organizationId,
+        projectId: body.openAI.projectId || existingOpenAI?.projectId,
       };
     }
 
     const result = await db.collection<Customer>('customers').findOneAndUpdate(
-      { _id: new ObjectId(customerId) },
+      { _id: new ObjectId(customerIdParam) },
       { $set: updateData },
       { returnDocument: 'after' }
     );

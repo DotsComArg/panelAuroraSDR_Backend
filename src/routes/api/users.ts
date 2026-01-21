@@ -6,6 +6,12 @@ import { hashPassword } from '../../lib/auth-utils.js';
 
 const router = Router();
 
+// Helper para convertir parámetros a string
+const getParamAsString = (param: string | string[] | undefined): string | null => {
+  if (!param) return null;
+  return Array.isArray(param) ? param[0] : param;
+};
+
 // Listar todos los usuarios
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -32,9 +38,9 @@ router.get('/', async (req: Request, res: Response) => {
 // Obtener usuario por ID
 router.get('/:userId', async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params;
+    const userIdParam = getParamAsString(req.params.userId);
     
-    if (!ObjectId.isValid(userId)) {
+    if (!userIdParam || !ObjectId.isValid(userIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de usuario inválido',
@@ -43,7 +49,7 @@ router.get('/:userId', async (req: Request, res: Response) => {
 
     const db = await getMongoDb();
     const user = await db.collection<User>('users').findOne({
-      _id: new ObjectId(userId),
+      _id: new ObjectId(userIdParam),
     });
 
     if (!user) {
@@ -155,7 +161,7 @@ router.post('/', async (req: Request, res: Response) => {
 // Actualizar usuario
 router.put('/:userId', async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params;
+    const userIdParam = getParamAsString(req.params.userId);
     const body = req.body as {
       email?: string;
       name?: string;
@@ -164,7 +170,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
       customerId?: string;
     };
     
-    if (!ObjectId.isValid(userId)) {
+    if (!userIdParam || !ObjectId.isValid(userIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de usuario inválido',
@@ -173,7 +179,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
 
     const db = await getMongoDb();
     const existingUser = await db.collection<User>('users').findOne({
-      _id: new ObjectId(userId),
+      _id: new ObjectId(userIdParam),
     });
 
     if (!existingUser) {
@@ -191,7 +197,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
       // Verificar si el email ya está en uso por otro usuario
       const emailExists = await db.collection<User>('users').findOne({
         email: body.email.toLowerCase().trim(),
-        _id: { $ne: new ObjectId(userId) },
+        _id: { $ne: new ObjectId(userIdParam) },
       });
 
       if (emailExists) {
@@ -229,7 +235,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
     }
 
     const result = await db.collection<User>('users').findOneAndUpdate(
-      { _id: new ObjectId(userId) },
+      { _id: new ObjectId(userIdParam) },
       { $set: updateData },
       { returnDocument: 'after' }
     );
@@ -254,9 +260,9 @@ router.put('/:userId', async (req: Request, res: Response) => {
 // Eliminar usuario
 router.delete('/:userId', async (req: Request, res: Response) => {
   try {
-    const { userId } = req.params;
+    const userIdParam = getParamAsString(req.params.userId);
     
-    if (!ObjectId.isValid(userId)) {
+    if (!userIdParam || !ObjectId.isValid(userIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de usuario inválido',
@@ -265,7 +271,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
 
     const db = await getMongoDb();
     const user = await db.collection<User>('users').findOne({
-      _id: new ObjectId(userId),
+      _id: new ObjectId(userIdParam),
     });
 
     if (!user) {
@@ -276,7 +282,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
     }
 
     await db.collection<User>('users').deleteOne({
-      _id: new ObjectId(userId),
+      _id: new ObjectId(userIdParam),
     });
 
     return res.json({

@@ -6,6 +6,12 @@ import { encrypt, decrypt } from '../../lib/encryption-utils.js';
 
 const router = Router();
 
+// Helper para convertir parámetros a string
+const getParamAsString = (param: string | string[] | undefined): string | null => {
+  if (!param) return null;
+  return Array.isArray(param) ? param[0] : param;
+};
+
 // Listar todos los customers
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -31,9 +37,9 @@ router.get('/', async (req: Request, res: Response) => {
 // Obtener customer por ID
 router.get('/:customerId', async (req: Request, res: Response) => {
   try {
-    const { customerId } = req.params;
+    const customerIdParam = getParamAsString(req.params.customerId);
     
-    if (!ObjectId.isValid(customerId)) {
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de cliente inválido',
@@ -42,7 +48,7 @@ router.get('/:customerId', async (req: Request, res: Response) => {
 
     const db = await getMongoDb();
     const customer = await db.collection<Customer>('customers').findOne({
-      _id: new ObjectId(customerId),
+      _id: new ObjectId(customerIdParam),
     });
 
     if (!customer) {
@@ -172,8 +178,8 @@ router.post('/', async (req: Request, res: Response) => {
     if (body.openAICredentials?.apiKey) {
       customerData.openAICredentials = {
         apiKey: encrypt(body.openAICredentials.apiKey),
-        organizationId: body.openAICredentials.organizationId,
-        projectId: body.openAICredentials.projectId,
+        ...(body.openAICredentials.organizationId && { organizationId: body.openAICredentials.organizationId }),
+        ...(body.openAICredentials.projectId && { projectId: body.openAICredentials.projectId }),
       };
     }
 
@@ -198,10 +204,10 @@ router.post('/', async (req: Request, res: Response) => {
 // Actualizar customer
 router.put('/:customerId', async (req: Request, res: Response) => {
   try {
-    const { customerId } = req.params;
+    const customerIdParam = getParamAsString(req.params.customerId);
     const body = req.body as Partial<CreateCustomerDto>;
     
-    if (!ObjectId.isValid(customerId)) {
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
       return res.status(400).json({
         success: false,
         error: 'ID de cliente inválido',
@@ -210,7 +216,7 @@ router.put('/:customerId', async (req: Request, res: Response) => {
 
     const db = await getMongoDb();
     const existing = await db.collection<Customer>('customers').findOne({
-      _id: new ObjectId(customerId),
+      _id: new ObjectId(customerIdParam),
     });
 
     if (!existing) {
@@ -254,15 +260,18 @@ router.put('/:customerId', async (req: Request, res: Response) => {
     }
 
     if (body.openAICredentials?.apiKey) {
+      const existingOpenAI = existing.openAICredentials;
       updateData.openAICredentials = {
         apiKey: encrypt(body.openAICredentials.apiKey),
-        organizationId: body.openAICredentials.organizationId,
-        projectId: body.openAICredentials.projectId,
+        ...(body.openAICredentials.organizationId && { organizationId: body.openAICredentials.organizationId }),
+        ...(body.openAICredentials.projectId && { projectId: body.openAICredentials.projectId }),
+        ...(existingOpenAI?.organizationId && !body.openAICredentials.organizationId && { organizationId: existingOpenAI.organizationId }),
+        ...(existingOpenAI?.projectId && !body.openAICredentials.projectId && { projectId: existingOpenAI.projectId }),
       };
     }
 
     const result = await db.collection<Customer>('customers').findOneAndUpdate(
-      { _id: new ObjectId(customerId) },
+      { _id: new ObjectId(customerIdParam) },
       { $set: updateData },
       { returnDocument: 'after' }
     );
