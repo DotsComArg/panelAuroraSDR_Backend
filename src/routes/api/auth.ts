@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { ObjectId } from 'mongodb';
 import { getMongoDb } from '../../lib/mongodb.js';
 import type { User } from '../../lib/types.js';
 import { verifyPassword } from '../../lib/auth-utils.js';
@@ -64,6 +65,31 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
+    // Obtener customerId correctamente
+    let customerId: string | undefined = undefined;
+    
+    if (user.customerId) {
+      // El customerId puede estar como ObjectId o string
+      const userCustomerId = user.customerId as any;
+      if (userCustomerId instanceof ObjectId) {
+        customerId = userCustomerId.toString();
+      } else {
+        customerId = String(userCustomerId).trim();
+      }
+      console.log(`[LOGIN] CustomerId obtenido del usuario: ${customerId}`);
+    } else {
+      // Si el usuario no tiene customerId pero es Cliente, intentar buscarlo por email del customer
+      if (user.role === 'Cliente') {
+        console.log(`[LOGIN] Usuario no tiene customerId, buscando por email del customer: ${email}`);
+        const customer = await db.collection('customers').findOne({ email: email });
+        if (customer && customer._id) {
+          const customerIdObj = customer._id as any;
+          customerId = customerIdObj instanceof ObjectId ? customerIdObj.toString() : String(customerIdObj);
+          console.log(`[LOGIN] CustomerId encontrado desde customer: ${customerId}`);
+        }
+      }
+    }
+
     // Cookies de sesión
     const maxAge = remember ? 60 * 60 * 24 * 30 : 60 * 60 * 24; // 30 días o 1 día
 
@@ -81,13 +107,16 @@ router.post('/login', async (req: Request, res: Response) => {
       httpOnly: false,
     });
 
-    if (user.customerId) {
-      res.cookie('customerId', user.customerId, {
+    if (customerId) {
+      res.cookie('customerId', customerId, {
         path: '/',
         maxAge: maxAge * 1000,
         sameSite: 'lax',
         httpOnly: false,
       });
+      console.log(`[LOGIN] Cookie customerId establecida: ${customerId}`);
+    } else {
+      console.log(`[LOGIN] ⚠️ No se estableció cookie customerId (usuario: ${user.email}, role: ${user.role})`);
     }
 
     res.cookie('userId', user._id?.toString() || '', {
@@ -97,6 +126,8 @@ router.post('/login', async (req: Request, res: Response) => {
       httpOnly: false,
     });
 
+    console.log(`[LOGIN] ✅ Login exitoso - Usuario: ${user.email}, Role: ${user.role}, CustomerId: ${customerId || 'N/A'}`);
+
     return res.json({
       success: true,
       data: {
@@ -104,7 +135,7 @@ router.post('/login', async (req: Request, res: Response) => {
         email: user.email,
         name: user.name,
         role: user.role,
-        customerId: user.customerId,
+        customerId: customerId,
         redirectUrl: user.role === 'SuperAdmin' ? '/admin' : '/',
       },
     });
