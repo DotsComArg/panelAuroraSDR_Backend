@@ -381,16 +381,24 @@ router.get('/features', async (req: Request, res: Response) => {
     const customerIdParam = getQueryParam(req.query.customerId);
     const emailParam = getQueryParam(req.query.email);
     
+    console.log('[FEATURES] Query params:', { customerId: customerIdParam, email: emailParam });
+    
     const db = await getMongoDb();
     let customer: Customer | null = null;
 
     // Buscar por customerId
     if (customerIdParam) {
-      if (ObjectId.isValid(customerIdParam)) {
+      // Limpiar el customerId (puede venir con espacios o caracteres extra)
+      const cleanCustomerId = customerIdParam.trim();
+      console.log('[FEATURES] Validating customerId:', cleanCustomerId, 'Length:', cleanCustomerId.length);
+      
+      if (ObjectId.isValid(cleanCustomerId)) {
         customer = await db.collection<Customer>('customers').findOne({
-          _id: new ObjectId(customerIdParam),
+          _id: new ObjectId(cleanCustomerId),
         });
+        console.log('[FEATURES] Customer found:', customer ? 'yes' : 'no');
       } else {
+        console.error('[FEATURES] Invalid ObjectId format:', cleanCustomerId);
         return res.status(400).json({
           success: false,
           error: 'ID de cliente inválido',
