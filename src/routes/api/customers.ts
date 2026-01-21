@@ -320,35 +320,54 @@ router.get('/features/list', async (req: Request, res: Response) => {
   }
 });
 
-// Obtener customers filtrados por features (query parameter)
+// Obtener features habilitadas de un customer específico
 router.get('/features', async (req: Request, res: Response) => {
   try {
-    const { feature } = req.query;
+    const { customerId, email } = req.query;
     
-    if (!feature || typeof feature !== 'string') {
-      return res.status(400).json({
+    const db = await getMongoDb();
+    let customer: Customer | null = null;
+
+    // Buscar por customerId
+    if (customerId && typeof customerId === 'string') {
+      if (ObjectId.isValid(customerId)) {
+        customer = await db.collection<Customer>('customers').findOne({
+          _id: new ObjectId(customerId),
+        });
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: 'ID de cliente inválido',
+        });
+      }
+    }
+    // Buscar por email
+    else if (email && typeof email === 'string') {
+      customer = await db.collection<Customer>('customers').findOne({
+        email: email.toLowerCase().trim(),
+      });
+    }
+    
+    if (!customer) {
+      return res.status(404).json({
         success: false,
-        error: 'El parámetro feature es requerido',
+        error: 'Cliente no encontrado',
       });
     }
 
-    const db = await getMongoDb();
-    const customers = await db.collection<Customer>('customers')
-      .find({ enabledViews: feature as ViewFeature })
-      .toArray();
-    
+    // Devolver las vistas/features habilitadas
     return res.json({
       success: true,
-      data: customers.map(c => ({
-        ...c,
-        _id: c._id?.toString(),
-      })),
+      data: {
+        _id: customer._id?.toString(),
+        enabledViews: customer.enabledViews || [],
+      },
     });
   } catch (error) {
-    console.error('Error al obtener customers por feature:', error);
+    console.error('Error al obtener features del customer:', error);
     return res.status(500).json({
       success: false,
-      error: 'Error al obtener clientes',
+      error: 'Error al obtener features',
     });
   }
 });
