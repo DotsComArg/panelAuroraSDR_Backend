@@ -464,11 +464,48 @@ router.get('/features', async (req: Request, res: Response) => {
         console.log('[FEATURES] ❌ Cliente no encontrado por email');
       }
     } else {
-      console.error('[FEATURES] ❌ No se proporcionó customerId ni email');
-      return res.status(400).json({
-        success: false,
-        error: 'Se requiere customerId o email',
-      });
+      // Si no hay customerId ni email, intentar obtener del usuario actual desde las cookies
+      console.log('[FEATURES] No hay customerId ni email en query, intentando obtener del usuario actual...');
+      const userEmail = req.cookies?.email;
+      
+      if (userEmail) {
+        console.log('[FEATURES] Email de cookie:', userEmail);
+        // Buscar usuario primero para obtener su customerId
+        const user = await db.collection('users').findOne({
+          email: userEmail.toLowerCase().trim(),
+        });
+        
+        if (user && user.customerId) {
+          console.log('[FEATURES] Usuario encontrado, customerId:', user.customerId);
+          // Buscar customer usando el customerId del usuario
+          if (ObjectId.isValid(user.customerId)) {
+            customer = await db.collection<Customer>('customers').findOne({
+              _id: new ObjectId(user.customerId),
+            });
+            if (customer) {
+              console.log('[FEATURES] ✅ Cliente encontrado usando customerId del usuario');
+            }
+          }
+        }
+        
+        // Si aún no se encuentra, buscar directamente por email del usuario en customers
+        if (!customer) {
+          customer = await db.collection<Customer>('customers').findOne({
+            email: userEmail.toLowerCase().trim(),
+          });
+          if (customer) {
+            console.log('[FEATURES] ✅ Cliente encontrado por email del usuario');
+          }
+        }
+      }
+      
+      if (!customer) {
+        console.error('[FEATURES] ❌ No se proporcionó customerId ni email, y no se encontró usuario en cookies');
+        return res.status(400).json({
+          success: false,
+          error: 'Se requiere customerId o email',
+        });
+      }
     }
     
     if (!customer) {
