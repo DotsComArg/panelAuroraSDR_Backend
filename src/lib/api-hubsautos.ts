@@ -64,7 +64,7 @@ class ApiService {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const result = await response.json();
+      const result = await response.json() as ApiResponse<T>;
       return result;
     } catch (error) {
       console.error('API Error:', error);

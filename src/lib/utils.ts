@@ -1,9 +1,4 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
-}
+// Utilidades del backend (sin dependencias de frontend)
 
 /**
  * Genera una contraseña segura con una longitud especificada

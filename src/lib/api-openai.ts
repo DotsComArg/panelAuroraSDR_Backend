@@ -17,6 +17,7 @@ interface OpenAIUsageData {
   }>
   total_usage: number
   total_cost: number
+  total_requests?: number
 }
 
 interface OpenAITokenUsage {
@@ -163,7 +164,7 @@ export async function getOpenAIUsage(
       })
 
       if (response.ok) {
-        const data = await response.json()
+        const data = await response.json() as any
         console.log('[OPENAI] ✅ Datos obtenidos del endpoint organization/usage/completions')
         console.log('[OPENAI] Estructura de respuesta:', {
           keys: Object.keys(data),
@@ -348,7 +349,7 @@ export async function getOpenAIUsage(
         )
         
         if (dayResponse.ok) {
-          const dayData = await dayResponse.json()
+          const dayData = await dayResponse.json() as any
           console.log(`[OPENAI] Datos obtenidos para ${date}:`, {
             keys: Object.keys(dayData),
             hasData: !!dayData.data,

@@ -365,7 +365,7 @@ class KommoApiClient {
         throw new Error(`Error en API de Kommo: ${response.status} - ${errorText}`)
       }
 
-      return response.json()
+      return response.json() as Promise<T>
     } catch (error: any) {
       // Si es un error de red o timeout, también podemos reintentar
       if (retryCount < this.MAX_RETRIES && !error.message?.includes('429')) {
