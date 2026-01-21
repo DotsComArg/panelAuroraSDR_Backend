@@ -302,47 +302,7 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-// Obtener customer por ID (DEBE ir después de las rutas específicas)
-router.get('/:customerId', async (req: Request, res: Response) => {
-  try {
-    const customerIdParam = getParamAsString(req.params.customerId);
-    
-    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
-      return res.status(400).json({
-        success: false,
-        error: 'ID de cliente inválido',
-      });
-    }
-
-    const db = await getMongoDb();
-    const customer = await db.collection<Customer>('customers').findOne({
-      _id: new ObjectId(customerIdParam),
-    });
-
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        error: 'Cliente no encontrado',
-      });
-    }
-
-    return res.json({
-      success: true,
-      data: {
-        ...customer,
-        _id: customer._id?.toString(),
-      },
-    });
-  } catch (error) {
-    console.error('Error al obtener customer:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Error al obtener cliente',
-    });
-  }
-});
-
-// Obtener customer actual del usuario logueado
+// Obtener customer actual del usuario logueado (DEBE ir antes de /:customerId)
 router.get('/current', async (req: Request, res: Response) => {
   try {
     const db = await getMongoDb();
@@ -468,7 +428,7 @@ router.get('/current', async (req: Request, res: Response) => {
   }
 });
 
-// Buscar customer por email
+// Buscar customer por email (DEBE ir antes de /:customerId)
 router.get('/by-email', async (req: Request, res: Response) => {
   try {
     const { email } = req.query;
@@ -504,6 +464,46 @@ router.get('/by-email', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: 'Error al buscar cliente',
+    });
+  }
+});
+
+// Obtener customer por ID (DEBE ir después de todas las rutas específicas)
+router.get('/:customerId', async (req: Request, res: Response) => {
+  try {
+    const customerIdParam = getParamAsString(req.params.customerId);
+    
+    if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de cliente inválido',
+      });
+    }
+
+    const db = await getMongoDb();
+    const customer = await db.collection<Customer>('customers').findOne({
+      _id: new ObjectId(customerIdParam),
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cliente no encontrado',
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        ...customer,
+        _id: customer._id?.toString(),
+      },
+    });
+  } catch (error) {
+    console.error('Error al obtener customer:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al obtener cliente',
     });
   }
 });
