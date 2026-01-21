@@ -397,116 +397,168 @@ router.get('/features', async (req: Request, res: Response) => {
     const customerIdParam = getQueryParam(req.query.customerId);
     const emailParam = getQueryParam(req.query.email);
     
-    // Validar que al menos uno esté presente
-    if (!customerIdParam && !emailParam) {
-      // Intentar obtener del usuario actual desde las cookies como último recurso
-      const userEmail = req.cookies?.email;
-      if (userEmail) {
-        const db = await getMongoDb();
-        // Buscar usuario primero para obtener su customerId
-        const user = await db.collection('users').findOne({
-          email: userEmail.toLowerCase().trim(),
-        });
-        
-        if (user && user.customerId && ObjectId.isValid(user.customerId)) {
-          const customer = await db.collection<Customer>('customers').findOne({
-            _id: new ObjectId(user.customerId),
-          });
-          
-          if (customer) {
-            // Obtener vistas: usar enabledViews si existe y tiene elementos, sino usar defaults según plan
-            const enabledViews = customer.enabledViews && customer.enabledViews.length > 0
-              ? customer.enabledViews.filter(view => VALID_VIEWS.includes(view)) // Filtrar inválidos
-              : getDefaultViews(customer.planContratado || 'Básico');
-            
-            return res.json({
-              success: true,
-              data: {
-                enabledViews: enabledViews,
-              },
-            });
-          }
-        }
+    console.log('[FEATURES] Request recibido:', {
+      customerId: customerIdParam,
+      email: emailParam,
+      cookies: {
+        email: req.cookies?.email,
+        customerId: req.cookies?.customerId,
+        userId: req.cookies?.userId
       }
-      
-      return res.status(400).json({
-        success: false,
-        error: 'Se requiere customerId o email',
-      });
-    }
+    });
     
     const db = await getMongoDb();
     let customer: Customer | null = null;
     
-    // Priorizar customerId si está disponible
+    // Estrategia 1: Buscar por customerId del query
     if (customerIdParam) {
       const cleanCustomerId = customerIdParam.trim();
+      console.log('[FEATURES] Intentando buscar por customerId:', cleanCustomerId);
       
-      // Validar formato de ObjectId
-      if (!ObjectId.isValid(cleanCustomerId)) {
-        // Si no es válido, intentar con email si está disponible
-        if (emailParam) {
-          const cleanEmail = emailParam.trim().toLowerCase();
+      if (ObjectId.isValid(cleanCustomerId)) {
+        try {
           customer = await db.collection<Customer>('customers').findOne({
-            email: cleanEmail,
+            _id: new ObjectId(cleanCustomerId),
           });
-        }
-        
-        // Si aún no se encontró, intentar desde las cookies del usuario
-        if (!customer) {
-          const userEmail = req.cookies?.email;
-          if (userEmail) {
-            const user = await db.collection('users').findOne({
-              email: userEmail.toLowerCase().trim(),
-            });
-            if (user && user.customerId && ObjectId.isValid(user.customerId)) {
-              customer = await db.collection<Customer>('customers').findOne({
-                _id: new ObjectId(user.customerId),
-              });
-            }
+          
+          if (customer) {
+            console.log('[FEATURES] ✅ Cliente encontrado por customerId:', customer._id?.toString());
+          } else {
+            console.log('[FEATURES] ⚠️ CustomerId válido pero no encontrado en BD');
           }
-        }
-        
-        if (!customer) {
-          return res.status(400).json({
-            success: false,
-            error: 'ID de cliente inválido',
-          });
+        } catch (error) {
+          console.error('[FEATURES] Error al buscar por customerId:', error);
         }
       } else {
-        // Buscar por customerId válido
-        customer = await db.collection<Customer>('customers').findOne({
-          _id: new ObjectId(cleanCustomerId),
-        });
-        
-        // Si no se encuentra, intentar con email como fallback
-        if (!customer && emailParam) {
-          const cleanEmail = emailParam.trim().toLowerCase();
-          customer = await db.collection<Customer>('customers').findOne({
-            email: cleanEmail,
-          });
-        }
+        console.log('[FEATURES] ⚠️ CustomerId no es un ObjectId válido:', cleanCustomerId);
       }
-    } else if (emailParam) {
-      // Buscar solo por email
+    }
+    
+    // Estrategia 2: Si no se encontró, buscar por email del query
+    if (!customer && emailParam) {
       const cleanEmail = emailParam.trim().toLowerCase();
+      console.log('[FEATURES] Intentando buscar por email:', cleanEmail);
+      
       customer = await db.collection<Customer>('customers').findOne({
         email: cleanEmail,
       });
+      
+      if (customer) {
+        console.log('[FEATURES] ✅ Cliente encontrado por email:', customer._id?.toString());
+      }
+    }
+    
+    // Estrategia 3: Si no se encontró, buscar por customerId de las cookies
+    if (!customer && req.cookies?.customerId) {
+      const cookieCustomerId = req.cookies.customerId.trim();
+      console.log('[FEATURES] Intentando buscar por customerId de cookies:', cookieCustomerId);
+      
+      if (ObjectId.isValid(cookieCustomerId)) {
+        try {
+          customer = await db.collection<Customer>('customers').findOne({
+            _id: new ObjectId(cookieCustomerId),
+          });
+          
+          if (customer) {
+            console.log('[FEATURES] ✅ Cliente encontrado por customerId de cookies:', customer._id?.toString());
+          }
+        } catch (error) {
+          console.error('[FEATURES] Error al buscar por customerId de cookies:', error);
+        }
+      }
+    }
+    
+    // Estrategia 4: Si no se encontró, buscar por usuario actual desde cookies
+    if (!customer && req.cookies?.email) {
+      const userEmail = req.cookies.email.toLowerCase().trim();
+      console.log('[FEATURES] Intentando buscar por usuario desde cookies:', userEmail);
+      
+      try {
+        // Buscar usuario primero para obtener su customerId
+        const user = await db.collection('users').findOne({
+          email: userEmail,
+        });
+        
+        if (user) {
+          console.log('[FEATURES] Usuario encontrado:', {
+            userId: user._id?.toString(),
+            customerId: user.customerId,
+            role: user.role
+          });
+          
+          if (user.customerId) {
+            // El customerId en users puede estar como string
+            let userCustomerId = user.customerId;
+            
+            // Si es un ObjectId, convertirlo a string
+            if (userCustomerId instanceof ObjectId) {
+              userCustomerId = userCustomerId.toString();
+            }
+            
+            console.log('[FEATURES] CustomerId del usuario:', userCustomerId, 'Tipo:', typeof userCustomerId);
+            
+            if (ObjectId.isValid(userCustomerId)) {
+              customer = await db.collection<Customer>('customers').findOne({
+                _id: new ObjectId(userCustomerId),
+              });
+              
+              if (customer) {
+                console.log('[FEATURES] ✅ Cliente encontrado desde usuario:', customer._id?.toString());
+              } else {
+                console.log('[FEATURES] ⚠️ CustomerId del usuario no existe en customers');
+              }
+            } else {
+              console.log('[FEATURES] ⚠️ CustomerId del usuario no es válido:', userCustomerId);
+            }
+          } else {
+            console.log('[FEATURES] ⚠️ Usuario no tiene customerId asignado');
+          }
+        } else {
+          console.log('[FEATURES] ⚠️ Usuario no encontrado en BD');
+        }
+      } catch (error) {
+        console.error('[FEATURES] Error al buscar por usuario:', error);
+      }
+    }
+    
+    // Estrategia 5: Si no se encontró, buscar por email del usuario en customers directamente
+    if (!customer && req.cookies?.email) {
+      const userEmail = req.cookies.email.toLowerCase().trim();
+      console.log('[FEATURES] Intentando buscar customer directamente por email:', userEmail);
+      
+      customer = await db.collection<Customer>('customers').findOne({
+        email: userEmail,
+      });
+      
+      if (customer) {
+        console.log('[FEATURES] ✅ Cliente encontrado por email del usuario:', customer._id?.toString());
+      }
     }
     
     // Verificar que existe
     if (!customer) {
+      console.error('[FEATURES] ❌ Cliente no encontrado después de todas las estrategias');
       return res.status(404).json({
         success: false,
         error: 'Cliente no encontrado',
       });
     }
     
+    console.log('[FEATURES] ✅ Cliente encontrado:', {
+      id: customer._id?.toString(),
+      nombre: customer.nombre,
+      apellido: customer.apellido,
+      email: customer.email,
+      plan: customer.planContratado,
+      enabledViews: customer.enabledViews?.length || 0
+    });
+    
     // Obtener vistas: usar enabledViews si existe y tiene elementos, sino usar defaults según plan
     const enabledViews = customer.enabledViews && customer.enabledViews.length > 0
       ? customer.enabledViews.filter(view => VALID_VIEWS.includes(view)) // Filtrar inválidos
       : getDefaultViews(customer.planContratado || 'Básico');
+    
+    console.log('[FEATURES] Vistas a devolver:', enabledViews);
     
     return res.json({
       success: true,
