@@ -73,6 +73,7 @@ router.get('/features', async (req: Request, res: Response) => {
     const customerIdParam = getQueryParam(req.query.customerId);
     const emailParam = getQueryParam(req.query.email);
     
+    // Debug: Ver todas las cookies y headers
     console.log('[FEATURES] Request recibido:', {
       customerId: customerIdParam,
       email: emailParam,
@@ -80,7 +81,9 @@ router.get('/features', async (req: Request, res: Response) => {
         email: req.cookies?.email,
         customerId: req.cookies?.customerId,
         userId: req.cookies?.userId
-      }
+      },
+      allCookies: req.cookies,
+      cookieHeader: req.headers.cookie,
     });
     
     const db = await getMongoDb();
@@ -308,10 +311,18 @@ router.get('/current', async (req: Request, res: Response) => {
     const db = await getMongoDb();
     let customer: Customer | null = null;
 
+    // Debug: Ver todas las cookies y headers
     console.log('[CURRENT] Obteniendo cliente actual:', {
       email: req.cookies?.email,
       customerId: req.cookies?.customerId,
-      userId: req.cookies?.userId
+      userId: req.cookies?.userId,
+      allCookies: req.cookies,
+      cookieHeader: req.headers.cookie,
+      headers: {
+        'cookie': req.headers.cookie,
+        'x-forwarded-proto': req.headers['x-forwarded-proto'],
+        'host': req.headers.host,
+      }
     });
 
     // Estrategia 1 (PREFERIDA): Buscar por usuario actual desde cookies para obtener su customerId

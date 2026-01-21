@@ -104,14 +104,25 @@ router.post('/login', async (req: Request, res: Response) => {
     });
 
     // Establecer customerId en cookies (CRÍTICO: debe ser el del usuario)
-    res.cookie('customerId', customerId, {
+    const cookieOptions: any = {
       path: '/',
       maxAge: maxAge * 1000,
-      sameSite: 'lax',
+      sameSite: 'lax' as const,
       httpOnly: false, // Necesario para que el frontend pueda leerlo
-      secure: process.env.NODE_ENV === 'production',
+    };
+    
+    // En producción, solo usar secure si estamos en HTTPS
+    // En Vercel, las cookies funcionan sin secure si el dominio es correcto
+    if (process.env.NODE_ENV === 'production' && req.secure) {
+      cookieOptions.secure = true;
+    }
+    
+    res.cookie('customerId', customerId, cookieOptions);
+    console.log(`[LOGIN] ✅ Cookie customerId establecida: ${customerId}`, {
+      customerId,
+      options: cookieOptions,
+      headers: res.getHeaders(),
     });
-    console.log(`[LOGIN] ✅ Cookie customerId establecida: ${customerId}`);
 
     res.cookie('userId', user._id?.toString() || '', {
       path: '/',
