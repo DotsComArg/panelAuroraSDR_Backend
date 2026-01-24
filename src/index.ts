@@ -15,8 +15,33 @@ const PORT = process.env.PORT || 3001;
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
+  'https://panel.aurorasdr.ai',
+  'https://www.panel.aurorasdr.ai',
   process.env.FRONTEND_URL,
 ].filter(Boolean) as string[];
+
+// Manejar preflight OPTIONS requests antes de CORS para evitar redirecciones
+app.options('*', (req, res) => {
+  const origin = req.headers.origin;
+  
+  // Verificar si el origen está permitido
+  const isAllowed = !origin || 
+    allowedOrigins.includes(origin) ||
+    origin.includes('vercel.app') ||
+    origin.includes('localhost') ||
+    origin.includes('aurorasdr.ai');
+  
+  if (isAllowed) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With, x-user-id, x-customer-id, x-user-email');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Max-Age', '86400'); // 24 horas
+    return res.status(200).end();
+  }
+  
+  return res.status(403).json({ error: 'CORS not allowed' });
+});
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -31,12 +56,13 @@ app.use(cors({
       if (process.env.NODE_ENV !== 'production' && origin.includes('localhost')) {
         callback(null, true);
       } else {
-        // En producción, permitir dominios de Vercel
-        if (origin.includes('vercel.app') || origin.includes('localhost')) {
+        // En producción, permitir dominios de Vercel y aurorasdr.ai
+        if (origin.includes('vercel.app') || 
+            origin.includes('localhost') || 
+            origin.includes('aurorasdr.ai')) {
           callback(null, true);
         } else {
-          callback(null, true); // Temporalmente permitir todos para debug
-          // callback(new Error('No permitido por CORS'));
+          callback(new Error('No permitido por CORS'));
         }
       }
     }
@@ -53,6 +79,7 @@ app.use(cors({
     'x-user-email',     // Header personalizado para autenticación
   ],
   exposedHeaders: ['Set-Cookie'], // Exponer headers de cookies
+  preflightContinue: false, // No continuar con otros middlewares después del preflight
 }));
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
