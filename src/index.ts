@@ -27,15 +27,20 @@ app.options('*', (req, res) => {
   // Verificar si el origen está permitido
   const isAllowed = !origin || 
     allowedOrigins.includes(origin) ||
-    origin.includes('vercel.app') ||
-    origin.includes('localhost') ||
-    origin.includes('aurorasdr.ai');
+    (origin && origin.includes('vercel.app')) ||
+    (origin && origin.includes('localhost')) ||
+    (origin && origin.includes('aurorasdr.ai'));
   
   if (isAllowed) {
-    res.header('Access-Control-Allow-Origin', origin || '*');
+    // Usar el origen específico si está presente, de lo contrario usar '*'
+    if (origin) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Access-Control-Allow-Credentials', 'true');
+    } else {
+      res.header('Access-Control-Allow-Origin', '*');
+    }
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With, x-user-id, x-customer-id, x-user-email');
-    res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Max-Age', '86400'); // 24 horas
     return res.status(200).end();
   }
@@ -48,23 +53,18 @@ app.use(cors({
     // Permitir requests sin origen (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
     
-    // Si el origen está en la lista permitida
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
+    // Verificar si el origen está permitido
+    const isAllowed = 
+      allowedOrigins.includes(origin) ||
+      origin.includes('vercel.app') ||
+      origin.includes('localhost') ||
+      origin.includes('aurorasdr.ai');
+    
+    if (isAllowed) {
+      // Devolver el origen específico para que CORS lo use dinámicamente
+      callback(null, origin);
     } else {
-      // En desarrollo, permitir localhost con cualquier puerto
-      if (process.env.NODE_ENV !== 'production' && origin.includes('localhost')) {
-        callback(null, true);
-      } else {
-        // En producción, permitir dominios de Vercel y aurorasdr.ai
-        if (origin.includes('vercel.app') || 
-            origin.includes('localhost') || 
-            origin.includes('aurorasdr.ai')) {
-          callback(null, true);
-        } else {
-          callback(new Error('No permitido por CORS'));
-        }
-      }
+      callback(new Error('No permitido por CORS'));
     }
   },
   credentials: true, // CRÍTICO: Permite que las cookies se envíen
