@@ -371,8 +371,17 @@ router.post('/toggle-2fa', async (req: Request, res: Response) => {
     }
 
     const db = await getMongoDb();
+    
+    // Validar que userId sea un ObjectId válido
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de usuario inválido',
+      });
+    }
+
     await db.collection<User>('users').updateOne(
-      { _id: new ObjectId(userId) },
+      { _id: new ObjectId(userId) as any },
       {
         $set: {
           twoFactorEnabled: enabled === true,
