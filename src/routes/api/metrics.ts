@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { getKommoCredentialsForCustomer, createKommoClient } from '../../lib/api-kommo';
+import { getKommoCredentialsForCustomer, createKommoClient } from '../../lib/api-kommo.js';
 
 const router = Router();
 
