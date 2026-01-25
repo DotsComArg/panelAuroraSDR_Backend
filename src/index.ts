@@ -20,65 +20,6 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
 ].filter(Boolean) as string[];
 
-// Middleware personalizado de CORS que se ejecuta antes que todo
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  
-  // Verificar si el origen está permitido
-  const isAllowed = !origin || 
-    allowedOrigins.includes(origin) ||
-    (origin && origin.includes('vercel.app')) ||
-    (origin && origin.includes('localhost')) ||
-    (origin && origin.includes('aurorasdr.ai'));
-  
-  if (isAllowed && origin) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
-  } else if (!origin) {
-    res.header('Access-Control-Allow-Origin', '*');
-  }
-  
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With, x-user-id, x-customer-id, x-user-email');
-  res.header('Access-Control-Expose-Headers', 'Set-Cookie');
-  
-  // Manejar preflight OPTIONS requests
-  if (req.method === 'OPTIONS') {
-    res.header('Access-Control-Max-Age', '86400'); // 24 horas
-    return res.status(200).end();
-  }
-  
-  next();
-});
-
-// Manejar preflight OPTIONS requests antes de CORS para evitar redirecciones
-app.options('*', (req, res) => {
-  const origin = req.headers.origin;
-  
-  // Verificar si el origen está permitido
-  const isAllowed = !origin || 
-    allowedOrigins.includes(origin) ||
-    (origin && origin.includes('vercel.app')) ||
-    (origin && origin.includes('localhost')) ||
-    (origin && origin.includes('aurorasdr.ai'));
-  
-  if (isAllowed) {
-    // Usar el origen específico si está presente, de lo contrario usar '*'
-    if (origin) {
-      res.header('Access-Control-Allow-Origin', origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-    } else {
-      res.header('Access-Control-Allow-Origin', '*');
-    }
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With, x-user-id, x-customer-id, x-user-email');
-    res.header('Access-Control-Max-Age', '86400'); // 24 horas
-    return res.status(200).end();
-  }
-  
-  return res.status(403).json({ error: 'CORS not allowed' });
-});
-
 app.use(cors({
   origin: (origin, callback) => {
     // Permitir requests sin origen (mobile apps, Postman, etc.)
