@@ -16,6 +16,12 @@ export interface User {
   customerRole?: CustomerRole;
   // Indica si el usuario está activo dentro de la cuenta del cliente
   isActive?: boolean;
+  // Autenticación de dos factores (2FA)
+  twoFactorEnabled?: boolean;
+  twoFactorSecret?: string; // Secret para generar códigos TOTP (opcional, para apps como Google Authenticator)
+  // Recuperación de contraseña
+  resetPasswordToken?: string;
+  resetPasswordExpires?: Date | string;
   createdAt?: string | Date;
   updatedAt?: string | Date;
 }

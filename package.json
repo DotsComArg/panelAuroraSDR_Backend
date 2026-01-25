@@ -12,6 +12,7 @@
     "diagnose:customerid": "tsx scripts/diagnose-customerid.ts"
   },
   "dependencies": {
+    "@sendgrid/mail": "^8.1.6",
     "@types/pg": "^8.11.4",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",

@@ -7,6 +7,7 @@ import usersRoutes from './routes/api/users.js';
 import customersCredentialsRoutes from './routes/api/customers-credentials.js';
 import customersUsersRoutes from './routes/api/customers-users.js';
 import metricsRoutes from './routes/api/metrics.js';
+import adminRoutes from './routes/api/admin.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -100,6 +101,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/metrics', metricsRoutes);
+app.use('/api/admin', adminRoutes);
 // Rutas anidadas de customers deben ir antes de la ruta general
 app.use('/api/customers/:customerId/credentials', customersCredentialsRoutes);
 app.use('/api/customers/:customerId/users', customersUsersRoutes);
