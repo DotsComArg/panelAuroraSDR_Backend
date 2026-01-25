@@ -3,7 +3,7 @@
  * Documentación: https://www.kommo.com/developers/
  */
 
-import { decrypt } from './encryption-utils'
+import { decrypt } from './encryption-utils.js'
 
 const KOMMO_BASE_URL = process.env.KOMMO_BASE_URL || ''
 const KOMMO_INTEGRATION_ID = process.env.KOMMO_INTEGRATION_ID || ''
@@ -1408,7 +1408,7 @@ export function createKommoClient(credentials: KommoCredentials): KommoApiClient
  */
 export async function getKommoCredentialsForCustomer(customerId: string): Promise<KommoCredentials | null> {
   try {
-    const { getMongoDb } = await import('./mongodb')
+    const { getMongoDb } = await import('./mongodb.js')
     const { ObjectId } = await import('mongodb')
     const db = await getMongoDb()
     
