@@ -140,13 +140,15 @@ export async function send2FACode(email: string, code: string): Promise<boolean>
           padding: 20px;
         }
         .container {
-          background: linear-gradient(135deg, #9333ea 0%, #3b82f6 100%);
+          background: #ffffff;
           border-radius: 10px;
           padding: 30px;
-          color: white;
+          color: #000000;
+          border: 1px solid #e5e7eb;
         }
         .code-box {
-          background: rgba(255, 255, 255, 0.2);
+          background: #f3f4f6;
+          border: 2px solid #9333ea;
           border-radius: 8px;
           padding: 20px;
           text-align: center;
@@ -155,11 +157,19 @@ export async function send2FACode(email: string, code: string): Promise<boolean>
           font-weight: bold;
           letter-spacing: 8px;
           font-family: 'Courier New', monospace;
+          color: #9333ea;
+        }
+        a {
+          color: #9333ea;
+          text-decoration: none;
+        }
+        a:hover {
+          text-decoration: underline;
         }
         .footer {
           margin-top: 20px;
           font-size: 12px;
-          opacity: 0.8;
+          color: #6b7280;
         }
       </style>
     </head>
@@ -209,31 +219,44 @@ export async function sendPasswordResetEmail(
           padding: 20px;
         }
         .container {
-          background: linear-gradient(135deg, #9333ea 0%, #3b82f6 100%);
+          background: #ffffff;
           border-radius: 10px;
           padding: 30px;
-          color: white;
+          color: #000000;
+          border: 1px solid #e5e7eb;
         }
         .button {
           display: inline-block;
-          background: white;
-          color: #9333ea;
+          background: #9333ea;
+          color: #ffffff;
           padding: 15px 30px;
           text-decoration: none;
           border-radius: 5px;
           font-weight: bold;
           margin: 20px 0;
         }
+        .button:hover {
+          background: #7e22ce;
+        }
+        a {
+          color: #9333ea;
+          text-decoration: none;
+        }
+        a:hover {
+          text-decoration: underline;
+        }
         .footer {
           margin-top: 20px;
           font-size: 12px;
-          opacity: 0.8;
+          color: #6b7280;
         }
         .warning {
-          background: rgba(255, 255, 255, 0.2);
+          background: #fef3c7;
+          border: 1px solid #fbbf24;
           padding: 15px;
           border-radius: 5px;
           margin: 20px 0;
+          color: #92400e;
         }
       </style>
     </head>
@@ -247,7 +270,7 @@ export async function sendPasswordResetEmail(
           <a href="${resetUrl}" class="button">Restablecer Contraseña</a>
         </div>
         <p>O copia y pega este enlace en tu navegador:</p>
-        <p style="word-break: break-all; font-size: 12px; opacity: 0.9;">${resetUrl}</p>
+        <p style="word-break: break-all; font-size: 12px; color: #9333ea;"><a href="${resetUrl}" style="color: #9333ea;">${resetUrl}</a></p>
         <div class="warning">
           <p><strong>Importante:</strong></p>
           <ul>
@@ -309,15 +332,23 @@ export async function sendNotification(
           padding: 20px;
         }
         .container {
-          background: linear-gradient(135deg, ${colors[type]} 0%, ${colors[type]}dd 100%);
+          background: #ffffff;
           border-radius: 10px;
           padding: 30px;
-          color: white;
+          color: #000000;
+          border: 1px solid #e5e7eb;
+        }
+        a {
+          color: #9333ea;
+          text-decoration: none;
+        }
+        a:hover {
+          text-decoration: underline;
         }
         .footer {
           margin-top: 20px;
           font-size: 12px;
-          opacity: 0.8;
+          color: #6b7280;
         }
       </style>
     </head>
@@ -372,15 +403,23 @@ export async function sendWelcomeEmail(email: string, name: string): Promise<boo
           padding: 20px;
         }
         .container {
-          background: linear-gradient(135deg, #9333ea 0%, #3b82f6 100%);
+          background: #ffffff;
           border-radius: 10px;
           padding: 30px;
-          color: white;
+          color: #000000;
+          border: 1px solid #e5e7eb;
+        }
+        a {
+          color: #9333ea;
+          text-decoration: none;
+        }
+        a:hover {
+          text-decoration: underline;
         }
         .footer {
           margin-top: 20px;
           font-size: 12px;
-          opacity: 0.8;
+          color: #6b7280;
         }
       </style>
     </head>
