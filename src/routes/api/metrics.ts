@@ -430,7 +430,82 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
   }
 });
 
-// Endpoint para sincronizar leads en background
+// Endpoint para sincronización inicial completa - trae TODOS los leads con TODOS sus campos
+router.post('/kommo/leads/full-sync', async (req: Request, res: Response) => {
+  try {
+    const customerId = getQueryParam(req.query.customerId || req.body?.customerId);
+
+    if (!customerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'customerId es requerido',
+      });
+    }
+
+    // Limpiar customerId
+    const cleanCustomerId = customerId.trim();
+    
+    console.log(`[KOMMO FULL SYNC] Iniciando sincronización completa inicial para customerId: ${cleanCustomerId}`);
+
+    const credentials = await getKommoCredentialsForCustomer(cleanCustomerId);
+    if (!credentials) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cliente no encontrado o no tiene credenciales de Kommo configuradas',
+      });
+    }
+
+    // Responder inmediatamente y procesar en background
+    res.json({
+      success: true,
+      message: 'Sincronización completa iniciada. Esto puede tardar varios minutos dependiendo de la cantidad de leads.',
+    });
+    
+    // Procesar en background
+    (async () => {
+      try {
+        const kommoClient = createKommoClient(credentials);
+        
+        console.log(`[KOMMO FULL SYNC] Obteniendo todos los leads con todos sus campos (etiquetas, contactos, empresas, etc.)...`);
+        
+        // Obtener todos los leads con todos los campos relacionados
+        // El método getLeadsWithFilters ya incluye with=contacts,companies
+        const apiLeads = await kommoClient.getLeadsWithFilters({});
+        
+        console.log(`[KOMMO FULL SYNC] Leads obtenidos desde API: ${apiLeads.length}. Iniciando guardado en MongoDB...`);
+        
+        // Sincronizar con forceFullSync=true para asegurar que todos los campos se guarden
+        const result = await syncKommoLeads(cleanCustomerId, apiLeads, true);
+        
+        console.log(`[KOMMO FULL SYNC] ✅ Sincronización completa exitosa para customerId ${cleanCustomerId}:`, {
+          totalProcessed: result.totalProcessed,
+          newLeads: result.newLeads,
+          updatedLeads: result.updatedLeads,
+          deletedLeads: result.deletedLeads,
+          errors: result.errors,
+          duration: `${result.duration}s`,
+        });
+        
+        // Verificar que los leads se guardaron correctamente
+        const { getKommoLeadsFromDb } = await import('../../lib/kommo-leads-storage.js');
+        const { total } = await getKommoLeadsFromDb(cleanCustomerId, { limit: 1 });
+        console.log(`[KOMMO FULL SYNC] Verificación: ${total} leads encontrados en BD para customerId ${cleanCustomerId}`);
+      } catch (error: any) {
+        console.error(`[KOMMO FULL SYNC] ❌ Error en sincronización completa para customerId ${cleanCustomerId}:`, error);
+        console.error('[KOMMO FULL SYNC] Stack trace:', error.stack);
+      }
+    })();
+
+  } catch (error: any) {
+    console.error('[KOMMO FULL SYNC] Error al iniciar sincronización completa:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Error al iniciar sincronización completa',
+    });
+  }
+});
+
+// Endpoint para sincronizar leads en background (sincronización incremental)
 router.post('/kommo/leads/sync', async (req: Request, res: Response) => {
   try {
     const customerId = getQueryParam(req.query.customerId || req.body?.customerId);
@@ -505,6 +580,195 @@ router.post('/kommo/leads/sync', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Error al iniciar sincronización',
+    });
+  }
+});
+
+// Endpoint para webhook de Kommo - recibe actualizaciones de leads
+// Kommo envía webhooks cuando hay cambios en leads, contactos, etc.
+// Documentación: https://www.kommo.com/developers/content/webhooks/
+router.post('/kommo/webhook', async (req: Request, res: Response) => {
+  try {
+    console.log('[KOMMO WEBHOOK] Recibida petición de webhook');
+    console.log('[KOMMO WEBHOOK] Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('[KOMMO WEBHOOK] Body:', JSON.stringify(req.body, null, 2));
+    
+    // Kommo envía los datos en el body
+    const webhookData = req.body;
+    
+    // Kommo puede enviar diferentes tipos de webhooks
+    // Estructura típica: { account: { id: ... }, leads: { add: [...], update: [...], delete: [...] } }
+    if (!webhookData) {
+      console.warn('[KOMMO WEBHOOK] Body vacío o inválido');
+      return res.status(400).json({
+        success: false,
+        error: 'Body vacío o inválido',
+      });
+    }
+
+    // Extraer accountId del webhook
+    // Kommo puede enviarlo en diferentes lugares según el tipo de webhook
+    const accountId = webhookData.account?.id || 
+                     webhookData.account_id || 
+                     webhookData.accountId ||
+                     req.headers['x-account-id'] as string;
+
+    if (!accountId) {
+      console.warn('[KOMMO WEBHOOK] No se encontró accountId en el webhook');
+      // Intentar extraer de la URL base si está disponible
+      console.log('[KOMMO WEBHOOK] Intentando buscar customerId por otros métodos...');
+    }
+
+    // Buscar el customerId por accountId de Kommo o por URL base
+    const db = await getMongoDb();
+    const { ObjectId } = await import('mongodb');
+    const customers = await db.collection('customers').find({}).toArray();
+    
+    let customerId: string | null = null;
+    
+    // Si tenemos accountId, buscar por él
+    if (accountId) {
+      for (const customer of customers) {
+        if (customer.kommoCredentials) {
+          const baseUrl = customer.kommoCredentials.baseUrl || '';
+          // La URL de Kommo es típicamente: https://{accountId}.kommo.com
+          const urlMatch = baseUrl.match(/https?:\/\/([^.]+)\.kommo\.com/i);
+          if (urlMatch && urlMatch[1] === accountId.toString()) {
+            customerId = customer._id.toString();
+            break;
+          }
+        }
+      }
+    }
+    
+    // Si no encontramos por accountId, intentar buscar por cualquier cliente con credenciales de Kommo
+    // y usar el primero que tenga (útil para desarrollo/testing)
+    if (!customerId) {
+      for (const customer of customers) {
+        if (customer.kommoCredentials) {
+          customerId = customer._id.toString();
+          console.log(`[KOMMO WEBHOOK] Usando customerId encontrado: ${customerId} (sin accountId específico)`);
+          break;
+        }
+      }
+    }
+
+    if (!customerId) {
+      console.warn(`[KOMMO WEBHOOK] No se encontró cliente con credenciales de Kommo`);
+      // Responder 200 para que Kommo no reintente, pero loguear el error
+      return res.status(200).json({
+        success: false,
+        message: 'Cliente no encontrado para este webhook',
+      });
+    }
+
+    console.log(`[KOMMO WEBHOOK] Procesando webhook para customerId: ${customerId}`);
+
+    // Procesar los eventos del webhook
+    // Kommo envía eventos en diferentes formatos según el tipo
+    const leadsEvents = webhookData.leads || {};
+    const leadsToAdd = leadsEvents.add || [];
+    const leadsToUpdate = leadsEvents.update || [];
+    const leadsToDelete = leadsEvents.delete || [];
+    
+    // También puede venir directamente como array
+    const allLeadsEvents = Array.isArray(webhookData.leads) ? webhookData.leads : [];
+    
+    // Combinar todos los eventos de leads
+    const allLeadIds = new Set<number>();
+    
+    [...leadsToAdd, ...leadsToUpdate, ...allLeadsEvents].forEach((lead: any) => {
+      const leadId = lead.id || lead.lead_id;
+      if (leadId) allLeadIds.add(leadId);
+    });
+    
+    // Procesar leads eliminados
+    leadsToDelete.forEach((leadId: number) => {
+      allLeadIds.add(leadId);
+    });
+
+    if (allLeadIds.size === 0) {
+      console.log('[KOMMO WEBHOOK] No hay eventos de leads para procesar');
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook recibido pero no hay eventos de leads para procesar',
+      });
+    }
+
+    console.log(`[KOMMO WEBHOOK] Procesando ${allLeadIds.size} leads: ${Array.from(allLeadIds).join(', ')}`);
+
+    // Obtener credenciales del cliente
+    const credentials = await getKommoCredentialsForCustomer(customerId);
+    if (!credentials) {
+      console.error(`[KOMMO WEBHOOK] No se encontraron credenciales para customerId: ${customerId}`);
+      return res.status(200).json({
+        success: false,
+        message: 'Credenciales no encontradas',
+      });
+    }
+
+    const kommoClient = createKommoClient(credentials);
+    
+    // Procesar cada lead
+    let leadsToSync: any[] = [];
+    
+    for (const leadId of allLeadIds) {
+      try {
+        // Si es un lead eliminado, marcarlo como eliminado en BD
+        if (leadsToDelete.includes(leadId)) {
+          const db = await getMongoDb();
+          await db.collection('kommo_leads').updateOne(
+            { customerId: customerId.trim(), id: leadId },
+            { $set: { is_deleted: true, syncedAt: new Date(), lastModifiedAt: new Date() } }
+          );
+          console.log(`[KOMMO WEBHOOK] Lead ${leadId} marcado como eliminado`);
+          continue;
+        }
+
+        // Obtener el lead completo desde la API de Kommo
+        const leadResponse: any = await kommoClient.authenticatedRequest(
+          `/leads/${leadId}?with=contacts,companies`
+        );
+        
+        if (leadResponse && leadResponse._embedded && leadResponse._embedded.leads) {
+          const lead = leadResponse._embedded.leads[0];
+          if (lead) {
+            leadsToSync.push(lead);
+          }
+        } else if (leadResponse && leadResponse.id) {
+          // A veces Kommo devuelve el lead directamente
+          leadsToSync.push(leadResponse);
+        }
+      } catch (error: any) {
+        console.error(`[KOMMO WEBHOOK] Error al obtener lead ${leadId}:`, error.message);
+        // Continuar con el siguiente lead
+      }
+    }
+
+    // Si hay leads para actualizar, sincronizarlos
+    if (leadsToSync.length > 0) {
+      console.log(`[KOMMO WEBHOOK] Sincronizando ${leadsToSync.length} leads actualizados`);
+      await syncKommoLeads(customerId, leadsToSync, false);
+      console.log(`[KOMMO WEBHOOK] ✅ ${leadsToSync.length} leads sincronizados exitosamente`);
+    }
+
+    // Responder rápidamente a Kommo (200 OK)
+    // Kommo espera una respuesta rápida, por eso procesamos en background si es necesario
+    res.status(200).json({
+      success: true,
+      message: `Webhook procesado: ${leadsToSync.length} leads actualizados, ${leadsToDelete.length} eliminados`,
+      processed: leadsToSync.length,
+      deleted: leadsToDelete.length,
+    });
+
+  } catch (error: any) {
+    console.error('[KOMMO WEBHOOK] Error al procesar webhook:', error);
+    console.error('[KOMMO WEBHOOK] Stack:', error.stack);
+    // Responder 200 para que Kommo no reintente en caso de errores temporales
+    // pero loguear el error para debugging
+    return res.status(200).json({
+      success: false,
+      error: error.message || 'Error al procesar webhook',
     });
   }
 });

@@ -294,7 +294,7 @@ class KommoApiClient {
   /**
    * Realiza una petición autenticada a la API de Kommo con retry y rate limiting
    */
-  private async authenticatedRequest<T>(
+  async authenticatedRequest<T>(
     endpoint: string,
     options: RequestInit = {},
     retryCount: number = 0
@@ -400,6 +400,8 @@ class KommoApiClient {
     // Construir query parameters base
     const baseParams: string[] = []
     baseParams.push('limit=250')
+    // Incluir datos relacionados (contactos, empresas, etiquetas, etc.)
+    baseParams.push('with=contacts,companies')
 
     // Agregar filtros de fecha
     // Kommo usa formato timestamp Unix en segundos
