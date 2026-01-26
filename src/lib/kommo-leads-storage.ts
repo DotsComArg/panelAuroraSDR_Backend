@@ -270,127 +270,128 @@ export async function syncKommoLeads(
 
       // Ejecutar operaciones en lote
       if (operations.length > 0) {
-        const batchNumber = Math.floor(i / batchSize) + 1;
-        const totalBatches = Math.ceil(validLeads.length / batchSize);
-        const progressPercent = Math.round((batchNumber / totalBatches) * 100);
-        console.log(`[KOMMO STORAGE] [${progressPercent}%] Procesando lote ${batchNumber}/${totalBatches}: ${operations.length} operaciones`);
-        
         try {
-          const bulkResult = await collection.bulkWrite(operations, { ordered: false });
+          const batchNumber = Math.floor(i / batchSize) + 1;
+          const totalBatches = Math.ceil(validLeads.length / batchSize);
+          const progressPercent = Math.round((batchNumber / totalBatches) * 100);
+          console.log(`[KOMMO STORAGE] [${progressPercent}%] Procesando lote ${batchNumber}/${totalBatches}: ${operations.length} operaciones`);
           
-          // Contar nuevos vs actualizados basándonos en los resultados
-          // upsertedCount = documentos nuevos insertados
-          // modifiedCount = documentos existentes actualizados
-          const actualNew = bulkResult.upsertedCount || 0;
-          const actualUpdated = bulkResult.modifiedCount || 0;
-          
-          newLeads += actualNew;
-          updatedLeads += actualUpdated;
-          
-          console.log(`[KOMMO STORAGE] ✅ Lote ${batchNumber}/${totalBatches} completado: ${actualNew} nuevos, ${actualUpdated} actualizados`);
-        } catch (bulkError: any) {
-          // Si hay errores de duplicados, intentar procesar individualmente
-          if (bulkError.code === 11000) {
-            console.error(`[KOMMO STORAGE] ⚠️  Error de clave duplicada en bulkWrite lote ${batchNumber}. Procesando individualmente...`);
+          try {
+            const bulkResult = await collection.bulkWrite(operations, { ordered: false });
             
-            // Primero, limpiar documentos con id null si es necesario
-            if (bulkError.message?.includes('leadId: null') || bulkError.message?.includes('id: null')) {
-              console.log(`[KOMMO STORAGE] Limpiando documentos con id null antes de procesar individualmente...`);
-              try {
-                const cleanupResult = await collection.deleteMany({
-                  customerId: cleanCustomerId,
-                  $or: [
-                    { id: { $eq: null as any } },
-                    { id: { $exists: false } },
-                    { id: { $type: 'null' } },
-                  ],
-                } as any);
-                if (cleanupResult.deletedCount > 0) {
-                  console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id null eliminados`);
+            // Contar nuevos vs actualizados basándonos en los resultados
+            // upsertedCount = documentos nuevos insertados
+            // modifiedCount = documentos existentes actualizados
+            const actualNew = bulkResult.upsertedCount || 0;
+            const actualUpdated = bulkResult.modifiedCount || 0;
+            
+            newLeads += actualNew;
+            updatedLeads += actualUpdated;
+            
+            console.log(`[KOMMO STORAGE] ✅ Lote ${batchNumber}/${totalBatches} completado: ${actualNew} nuevos, ${actualUpdated} actualizados`);
+          } catch (bulkError: any) {
+            // Si hay errores de duplicados, intentar procesar individualmente
+            if (bulkError.code === 11000) {
+              console.error(`[KOMMO STORAGE] ⚠️  Error de clave duplicada en bulkWrite lote ${batchNumber}. Procesando individualmente...`);
+              
+              // Primero, limpiar documentos con id null si es necesario
+              if (bulkError.message?.includes('leadId: null') || bulkError.message?.includes('id: null')) {
+                console.log(`[KOMMO STORAGE] Limpiando documentos con id null antes de procesar individualmente...`);
+                try {
+                  const cleanupResult = await collection.deleteMany({
+                    customerId: cleanCustomerId,
+                    $or: [
+                      { id: { $eq: null as any } },
+                      { id: { $exists: false } },
+                      { id: { $type: 'null' } },
+                    ],
+                  } as any);
+                  if (cleanupResult.deletedCount > 0) {
+                    console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id null eliminados`);
+                  }
+                } catch (cleanupError: any) {
+                  console.warn(`[KOMMO STORAGE] ⚠️  Error al limpiar documentos con id null:`, cleanupError.message);
                 }
-              } catch (cleanupError: any) {
-                console.warn(`[KOMMO STORAGE] ⚠️  Error al limpiar documentos con id null:`, cleanupError.message);
               }
-            }
-            
-            let individualSuccess = 0;
-            let individualErrors = 0;
-            
-            // Procesar cada operación individualmente
-            for (const op of operations) {
-              try {
-                // Verificar que el lead tenga id válido antes de intentar guardarlo
-                const leadId = op.updateOne.filter.id;
-                if (!leadId || leadId === null || leadId === undefined || typeof leadId !== 'number' || isNaN(leadId) || leadId <= 0) {
-                  console.error(`[KOMMO STORAGE] ⚠️  Operación con id inválido saltada:`, {
-                    filter: op.updateOne.filter,
-                    leadId,
-                    leadIdType: typeof leadId,
-                  });
-                  individualErrors++;
-                  errors++;
-                  continue;
-                }
+              
+              let individualSuccess = 0;
+              let individualErrors = 0;
+              
+              // Procesar cada operación individualmente
+              for (const op of operations) {
+                try {
+                  // Verificar que el lead tenga id válido antes de intentar guardarlo
+                  const leadId = op.updateOne.filter.id;
+                  if (!leadId || leadId === null || leadId === undefined || typeof leadId !== 'number' || isNaN(leadId) || leadId <= 0) {
+                    console.error(`[KOMMO STORAGE] ⚠️  Operación con id inválido saltada:`, {
+                      filter: op.updateOne.filter,
+                      leadId,
+                      leadIdType: typeof leadId,
+                    });
+                    individualErrors++;
+                    errors++;
+                    continue;
+                  }
 
-                const updateResult = await collection.updateOne(
-                  op.updateOne.filter,
-                  op.updateOne.update,
-                  { upsert: true }
-                );
-                
-                // Actualizar contadores basados en el resultado real
-                if (updateResult.upsertedCount > 0) {
-                  newLeads++;
-                } else if (updateResult.modifiedCount > 0) {
-                  updatedLeads++;
-                }
-                
-                individualSuccess++;
-              } catch (individualError: any) {
-                if (individualError.code === 11000) {
-                  // Si es error de duplicado, intentar actualizar en lugar de insertar
-                  // Esto puede pasar si hay un documento con id null que causa conflicto
-                  try {
-                    // Intentar actualizar directamente sin upsert
-                    const updateResult = await collection.updateOne(
-                      op.updateOne.filter,
-                      op.updateOne.update
-                    );
-                    if (updateResult.modifiedCount > 0) {
-                      updatedLeads++;
-                      individualSuccess++;
-                    } else {
-                      // Si no se modificó, el documento ya existe y está actualizado
+                  const updateResult = await collection.updateOne(
+                    op.updateOne.filter,
+                    op.updateOne.update,
+                    { upsert: true }
+                  );
+                  
+                  // Actualizar contadores basados en el resultado real
+                  if (updateResult.upsertedCount > 0) {
+                    newLeads++;
+                  } else if (updateResult.modifiedCount > 0) {
+                    updatedLeads++;
+                  }
+                  
+                  individualSuccess++;
+                } catch (individualError: any) {
+                  if (individualError.code === 11000) {
+                    // Si es error de duplicado, intentar actualizar en lugar de insertar
+                    // Esto puede pasar si hay un documento con id null que causa conflicto
+                    try {
+                      // Intentar actualizar directamente sin upsert
+                      const updateResult = await collection.updateOne(
+                        op.updateOne.filter,
+                        op.updateOne.update
+                      );
+                      if (updateResult.modifiedCount > 0) {
+                        updatedLeads++;
+                        individualSuccess++;
+                      } else {
+                        // Si no se modificó, el documento ya existe y está actualizado
+                        individualErrors++;
+                      }
+                    } catch (retryError: any) {
+                      // Si aún falla, simplemente continuar
+                      console.warn(`[KOMMO STORAGE] ⚠️  Lead ${op.updateOne.filter.id} no pudo ser procesado, continuando...`);
                       individualErrors++;
                     }
-                  } catch (retryError: any) {
-                    // Si aún falla, simplemente continuar
-                    console.warn(`[KOMMO STORAGE] ⚠️  Lead ${op.updateOne.filter.id} no pudo ser procesado, continuando...`);
+                  } else {
+                    console.error(`[KOMMO STORAGE] Error individual para lead ${op.updateOne.filter.id}:`, individualError.message);
                     individualErrors++;
+                    errors++;
                   }
-                } else {
-                  console.error(`[KOMMO STORAGE] Error individual para lead ${op.updateOne.filter.id}:`, individualError.message);
-                  individualErrors++;
-                  errors++;
                 }
               }
+              
+              console.log(`[KOMMO STORAGE] ✅ Procesamiento individual lote ${batchNumber} completado: ${individualSuccess} exitosos, ${individualErrors} saltados/errores`);
+            } else {
+              console.error(`[KOMMO STORAGE] ⚠️  Error en bulkWrite lote ${batchNumber}:`, bulkError.message);
+              // Continuar con el siguiente lote en lugar de lanzar error
+              console.warn(`[KOMMO STORAGE] Continuando con el siguiente lote...`);
+              errors += operations.length;
             }
-            
-            console.log(`[KOMMO STORAGE] ✅ Procesamiento individual lote ${batchNumber} completado: ${individualSuccess} exitosos, ${individualErrors} saltados/errores`);
-          } else {
-            console.error(`[KOMMO STORAGE] ⚠️  Error en bulkWrite lote ${batchNumber}:`, bulkError.message);
-            // Continuar con el siguiente lote en lugar de lanzar error
-            console.warn(`[KOMMO STORAGE] Continuando con el siguiente lote...`);
-            errors += operations.length;
           }
+        } catch (unexpectedError: any) {
+          // Capturar cualquier error inesperado en el procesamiento del lote completo
+          console.error(`[KOMMO STORAGE] ❌ Error inesperado procesando lote ${Math.floor(i / batchSize) + 1}:`, unexpectedError.message);
+          console.error(`[KOMMO STORAGE] Stack:`, unexpectedError.stack);
+          errors += operations.length;
+          // IMPORTANTE: Continuar con el siguiente lote
         }
-      } catch (unexpectedError: any) {
-        // Capturar cualquier error inesperado en el procesamiento del lote completo
-        console.error(`[KOMMO STORAGE] ❌ Error inesperado procesando lote ${Math.floor(i / batchSize) + 1}:`, unexpectedError.message);
-        console.error(`[KOMMO STORAGE] Stack:`, unexpectedError.stack);
-        errors += operations.length;
-        // IMPORTANTE: Continuar con el siguiente lote
-      }
       }
       
       // Log de progreso cada 10 lotes para no saturar los logs
