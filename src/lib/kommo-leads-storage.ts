@@ -383,13 +383,14 @@ export async function syncKommoLeads(
             console.warn(`[KOMMO STORAGE] Continuando con el siguiente lote...`);
             errors += operations.length;
           }
-        } catch (unexpectedError: any) {
-          // Capturar cualquier error inesperado y continuar
-          console.error(`[KOMMO STORAGE] ❌ Error inesperado en lote ${batchNumber}:`, unexpectedError.message);
-          console.error(`[KOMMO STORAGE] Stack:`, unexpectedError.stack);
-          errors += operations.length;
-          // IMPORTANTE: Continuar con el siguiente lote
         }
+      } catch (unexpectedError: any) {
+        // Capturar cualquier error inesperado en el procesamiento del lote completo
+        console.error(`[KOMMO STORAGE] ❌ Error inesperado procesando lote ${Math.floor(i / batchSize) + 1}:`, unexpectedError.message);
+        console.error(`[KOMMO STORAGE] Stack:`, unexpectedError.stack);
+        errors += operations.length;
+        // IMPORTANTE: Continuar con el siguiente lote
+      }
       }
       
       // Log de progreso cada 10 lotes para no saturar los logs
