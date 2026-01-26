@@ -1149,9 +1149,12 @@ class KommoApiClient {
       statusByPipeline.set(pipeline.id, pipelineStatusIds)
     })
 
-    // Filtrar leads activos (no eliminados)
+    // Filtrar leads activos (no eliminados) para cálculos de won/lost
     // IMPORTANTE: Algunos leads pueden tener is_deleted como null o undefined, tratarlos como activos
     const activeLeads = leads.filter((lead) => lead.is_deleted !== true)
+    
+    // El TOTAL debe incluir TODOS los leads (incluyendo eliminados)
+    const totalLeads = leads.length
 
     // Identificar etapas ganadas y perdidas POR PIPELINE (no globalmente)
     // Esto es crítico porque un status_id puede tener diferentes significados en diferentes pipelines

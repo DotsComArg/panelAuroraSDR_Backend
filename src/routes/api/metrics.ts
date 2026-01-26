@@ -336,7 +336,7 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     filters.limit = limit;
 
     // Obtener leads desde BD (MUCHO más rápido)
-    const { leads, total } = await getKommoLeadsFromDb(customerId, filters);
+    const { leads, total, totalAll } = await getKommoLeadsFromDb(customerId, filters);
 
     // Obtener última sincronización
     const lastSync = await getLastSyncTime(customerId);

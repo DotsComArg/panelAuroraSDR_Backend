@@ -222,7 +222,7 @@ export async function getKommoLeadsFromDb(
     limit?: number;
     skip?: number;
   } = {}
-): Promise<{ leads: KommoLead[]; total: number }> {
+): Promise<{ leads: KommoLead[]; total: number; totalAll: number }> {
   try {
     const db = await getMongoDb();
     const collection = db.collection<StoredKommoLead>('kommo_leads');
