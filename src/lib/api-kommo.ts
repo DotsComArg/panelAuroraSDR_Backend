@@ -17,7 +17,7 @@ interface KommoAccessToken {
   refresh_token: string
 }
 
-interface KommoLead {
+export interface KommoLead {
   id: number
   name: string
   price: number

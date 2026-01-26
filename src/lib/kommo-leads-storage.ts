@@ -98,9 +98,9 @@ export async function syncKommoLeads(
     if (!isFullSync) {
       const existingLeads = await collection
         .find({ customerId })
-        .toArray();
+        .toArray() as StoredKommoLead[];
       
-      existingLeads.forEach(lead => {
+      existingLeads.forEach((lead: StoredKommoLead) => {
         existingLeadsMap.set(lead.id, lead);
       });
     }
@@ -166,7 +166,7 @@ export async function syncKommoLeads(
         {
           customerId,
           id: { $nin: Array.from(apiLeadIds) },
-          is_deleted: { $ne: true },
+          is_deleted: { $ne: true } as any,
         },
         {
           $set: {
@@ -228,7 +228,10 @@ export async function getKommoLeadsFromDb(
     const collection = db.collection<StoredKommoLead>('kommo_leads');
 
     // Construir query
-    const query: any = { customerId, is_deleted: { $ne: true } };
+    const query: any = { 
+      customerId, 
+      is_deleted: { $ne: true } as any 
+    };
 
     // Filtros de fecha
     const dateField = filters.dateField || 'created_at';

@@ -1,5 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { getKommoCredentialsForCustomer, createKommoClient } from '../../lib/api-kommo.js';
+import { 
+  getKommoLeadsFromDb, 
+  syncKommoLeads,
+  getLastSyncTime 
+} from '../../lib/kommo-leads-storage.js';
 
 const router = Router();
 
@@ -242,12 +247,7 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
 
     console.log(`[KOMMO API] Obteniendo leads para customerId: ${customerId}, refresh: ${refresh}`);
 
-    // Importar funciones de almacenamiento
-    const { 
-      getKommoLeadsFromDb, 
-      syncKommoLeads,
-      getLastSyncTime 
-    } = await import('../lib/kommo-leads-storage.js');
+    // Usar funciones de almacenamiento importadas
 
     // Si se solicita refresh, sincronizar primero
     if (refresh) {
@@ -374,7 +374,6 @@ router.post('/kommo/leads/sync', async (req: Request, res: Response) => {
         const kommoClient = createKommoClient(credentials);
         const apiLeads = await kommoClient.getLeadsWithFilters({});
         
-        const { syncKommoLeads } = await import('../lib/kommo-leads-storage.js');
         const result = await syncKommoLeads(customerId, apiLeads, forceFullSync);
         
         console.log(`[KOMMO API] Sincronización completada:`, result);
