@@ -83,6 +83,12 @@ export async function syncKommoLeads(
     // Limpiar customerId para asegurar coincidencia exacta
     const cleanCustomerId = customerId.trim();
     
+    console.log(`[KOMMO STORAGE] ==========================================`);
+    console.log(`[KOMMO STORAGE] Iniciando syncKommoLeads`);
+    console.log(`[KOMMO STORAGE] CustomerId: "${cleanCustomerId}" (length: ${cleanCustomerId.length})`);
+    console.log(`[KOMMO STORAGE] Total leads a procesar: ${leads.length}`);
+    console.log(`[KOMMO STORAGE] ForceFullSync: ${forceFullSync}`);
+    
     // Obtener el timestamp de la última sincronización
     const lastSync = await collection.findOne(
       { customerId: cleanCustomerId },
@@ -95,6 +101,9 @@ export async function syncKommoLeads(
 
     // Si es sincronización completa o no hay última sincronización, marcar todos como nuevos
     const isFullSync = forceFullSync || lastSyncTime === 0;
+    
+    console.log(`[KOMMO STORAGE] LastSyncTime: ${lastSyncTime ? new Date(lastSyncTime).toISOString() : 'Nunca'}`);
+    console.log(`[KOMMO STORAGE] IsFullSync: ${isFullSync}`);
 
     // Crear un mapa de leads existentes para comparación rápida
     const existingLeadsMap = new Map<number, StoredKommoLead>();
@@ -130,10 +139,15 @@ export async function syncKommoLeads(
           if (isNew || isModified || isFullSync) {
             const storedLead: StoredKommoLead = {
               ...lead,
-              customerId: cleanCustomerId,
+              customerId: cleanCustomerId, // Asegurar que el customerId esté correctamente asignado
               syncedAt: now,
               lastModifiedAt: new Date(leadLastModified),
             };
+
+            // Verificar que el customerId se esté asignando correctamente
+            if (storedLead.customerId !== cleanCustomerId) {
+              console.error(`[KOMMO STORAGE] ⚠️  ERROR: customerId no coincide! Esperado: "${cleanCustomerId}", Obtenido: "${storedLead.customerId}"`);
+            }
 
             operations.push({
               updateOne: {
@@ -157,7 +171,9 @@ export async function syncKommoLeads(
 
       // Ejecutar operaciones en lote
       if (operations.length > 0) {
-        await collection.bulkWrite(operations, { ordered: false });
+        console.log(`[KOMMO STORAGE] Ejecutando bulkWrite para lote ${Math.floor(i / batchSize) + 1}: ${operations.length} operaciones`);
+        const bulkResult = await collection.bulkWrite(operations, { ordered: false });
+        console.log(`[KOMMO STORAGE] BulkWrite completado: ${bulkResult.insertedCount} insertados, ${bulkResult.modifiedCount} modificados`);
       }
     }
 
@@ -184,14 +200,23 @@ export async function syncKommoLeads(
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
 
-    console.log(`[KOMMO STORAGE] Sincronización completada para customerId ${customerId}:`, {
-      totalProcessed: leads.length,
-      newLeads,
-      updatedLeads,
-      deletedLeads,
-      errors,
-      duration: `${duration}s`,
+    // Verificar cuántos leads hay realmente en la BD después de la sincronización
+    const verifyCount = await collection.countDocuments({ customerId: cleanCustomerId });
+    const verifyActiveCount = await collection.countDocuments({ 
+      customerId: cleanCustomerId, 
+      is_deleted: { $ne: true } as any 
     });
+
+    console.log(`[KOMMO STORAGE] ==========================================`);
+    console.log(`[KOMMO STORAGE] Sincronización completada para customerId "${cleanCustomerId}":`);
+    console.log(`[KOMMO STORAGE]   - Total procesados: ${leads.length}`);
+    console.log(`[KOMMO STORAGE]   - Nuevos leads: ${newLeads}`);
+    console.log(`[KOMMO STORAGE]   - Leads actualizados: ${updatedLeads}`);
+    console.log(`[KOMMO STORAGE]   - Leads eliminados: ${deletedLeads}`);
+    console.log(`[KOMMO STORAGE]   - Errores: ${errors}`);
+    console.log(`[KOMMO STORAGE]   - Duración: ${duration}s`);
+    console.log(`[KOMMO STORAGE]   - Verificación en BD: ${verifyCount} total, ${verifyActiveCount} activos`);
+    console.log(`[KOMMO STORAGE] ==========================================`);
 
     return {
       totalProcessed: leads.length,
