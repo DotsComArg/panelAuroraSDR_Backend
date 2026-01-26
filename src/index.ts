@@ -119,6 +119,18 @@ app.use((req, res) => {
 
 // Solo iniciar el servidor si no estamos en Vercel
 if (process.env.VERCEL !== '1') {
+  // Inicializar índices de Kommo leads al iniciar el servidor
+  (async () => {
+    try {
+      const { initializeKommoLeadsIndexes } = await import('./lib/kommo-leads-storage.js');
+      await initializeKommoLeadsIndexes();
+      console.log('✅ Índices de Kommo leads inicializados');
+    } catch (error) {
+      console.error('⚠️  Error al inicializar índices de Kommo leads:', error);
+      // No detener el servidor si falla la inicialización de índices
+    }
+  })();
+
   app.listen(PORT, () => {
     console.log(`🚀 Backend server running on http://localhost:${PORT}`);
   });
