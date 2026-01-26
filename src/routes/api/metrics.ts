@@ -5,6 +5,7 @@ import {
   syncKommoLeads,
   getLastSyncTime 
 } from '../../lib/kommo-leads-storage.js';
+import { getMongoDb } from '../../lib/mongodb.js';
 
 const router = Router();
 
