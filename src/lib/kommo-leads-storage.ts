@@ -113,7 +113,7 @@ export async function syncKommoLeads(
       const cleanupResult = await collection.deleteMany({
         customerId: cleanCustomerId,
         $or: [
-          { id: null },
+          { id: { $eq: null } },
           { id: { $exists: false } },
           { id: { $type: 'null' } },
         ],
@@ -125,7 +125,7 @@ export async function syncKommoLeads(
     
     // Obtener el timestamp de la última sincronización
     const lastSync = await collection.findOne(
-      { customerId: cleanCustomerId, id: { $ne: null, $exists: true } },
+      { customerId: cleanCustomerId, id: { $ne: null as any, $exists: true } },
       { sort: { syncedAt: -1 }, projection: { syncedAt: 1 } }
     );
 
@@ -146,7 +146,7 @@ export async function syncKommoLeads(
       const cleanupResult = await collection.deleteMany({
         customerId: cleanCustomerId,
         $or: [
-          { id: null },
+          { id: { $eq: null } },
           { id: { $exists: false } },
           { id: { $type: 'null' } },
           { id: { $type: 'undefined' } },
@@ -297,7 +297,7 @@ export async function syncKommoLeads(
                 const cleanupResult = await collection.deleteMany({
                   customerId: cleanCustomerId,
                   $or: [
-                    { id: null },
+                    { id: { $eq: null } },
                     { id: { $exists: false } },
                     { id: { $type: 'null' } },
                   ],

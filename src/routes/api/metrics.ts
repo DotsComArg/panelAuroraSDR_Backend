@@ -472,7 +472,7 @@ router.post('/kommo/leads/full-sync', async (req: Request, res: Response) => {
       const cleanupResult = await db.collection('kommo_leads').deleteMany({
         customerId: cleanCustomerId,
         $or: [
-          { id: null },
+          { id: { $eq: null } },
           { id: { $exists: false } },
           { id: { $type: 'null' } },
         ],
