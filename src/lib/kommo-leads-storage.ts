@@ -202,8 +202,9 @@ export async function syncKommoLeads(
       });
     }
 
-    // Procesar leads en lotes para mejor rendimiento
-    const batchSize = 500;
+    // Procesar leads en lotes pequeños para máxima confiabilidad
+    // Lotes de 50 aseguran que cada operación sea rápida y confiable
+    const batchSize = 50;
     const now = new Date();
 
     for (let i = 0; i < validLeads.length; i += batchSize) {
@@ -265,11 +266,8 @@ export async function syncKommoLeads(
               },
             });
 
-            if (isNew) {
-              newLeads++;
-            } else if (isModified) {
-              updatedLeads++;
-            }
+            // Nota: Los contadores se actualizarán después del bulkWrite basándose en los resultados reales
+            // Esto es más preciso que contar antes de saber si realmente se insertó o actualizó
           }
         } catch (error) {
           console.error(`[KOMMO STORAGE] Error procesando lead ${lead?.id}:`, error);
@@ -281,10 +279,22 @@ export async function syncKommoLeads(
       if (operations.length > 0) {
         const batchNumber = Math.floor(i / batchSize) + 1;
         const totalBatches = Math.ceil(validLeads.length / batchSize);
-        console.log(`[KOMMO STORAGE] Ejecutando bulkWrite para lote ${batchNumber}/${totalBatches}: ${operations.length} operaciones`);
+        const progressPercent = Math.round((batchNumber / totalBatches) * 100);
+        console.log(`[KOMMO STORAGE] [${progressPercent}%] Procesando lote ${batchNumber}/${totalBatches}: ${operations.length} operaciones`);
+        
         try {
           const bulkResult = await collection.bulkWrite(operations, { ordered: false });
-          console.log(`[KOMMO STORAGE] BulkWrite lote ${batchNumber} completado: ${bulkResult.insertedCount} insertados, ${bulkResult.modifiedCount} modificados, ${bulkResult.upsertedCount} upserted`);
+          
+          // Contar nuevos vs actualizados basándonos en los resultados
+          // upsertedCount = documentos nuevos insertados
+          // modifiedCount = documentos existentes actualizados
+          const actualNew = bulkResult.upsertedCount || 0;
+          const actualUpdated = bulkResult.modifiedCount || 0;
+          
+          newLeads += actualNew;
+          updatedLeads += actualUpdated;
+          
+          console.log(`[KOMMO STORAGE] ✅ Lote ${batchNumber}/${totalBatches} completado: ${actualNew} nuevos, ${actualUpdated} actualizados`);
         } catch (bulkError: any) {
           // Si hay errores de duplicados, intentar procesar individualmente
           if (bulkError.code === 11000) {
@@ -329,11 +339,19 @@ export async function syncKommoLeads(
                   continue;
                 }
 
-                await collection.updateOne(
+                const updateResult = await collection.updateOne(
                   op.updateOne.filter,
                   op.updateOne.update,
                   { upsert: true }
                 );
+                
+                // Actualizar contadores basados en el resultado real
+                if (updateResult.upsertedCount > 0) {
+                  newLeads++;
+                } else if (updateResult.modifiedCount > 0) {
+                  updatedLeads++;
+                }
+                
                 individualSuccess++;
               } catch (individualError: any) {
                 if (individualError.code === 11000) {

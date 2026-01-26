@@ -485,62 +485,87 @@ router.post('/kommo/leads/full-sync', async (req: Request, res: Response) => {
       // Continuar de todas formas
     }
 
-    // Responder inmediatamente y procesar en background
-    // Esto evita timeouts en Vercel y permite que el proceso continúe
-    res.json({
-      success: true,
-      message: 'Sincronización completa iniciada. Los leads se están guardando en la base de datos. Esto puede tardar varios minutos.',
-    });
+    // IMPORTANTE: Procesar TODO antes de responder
+    // Procesamos en lotes de 50 para máxima confiabilidad
+    // Esto puede tardar varios minutos pero garantiza que todos los leads se guarden
+    try {
+      const kommoClient = createKommoClient(credentials);
+      
+      console.log(`[KOMMO FULL SYNC] Cliente de Kommo creado`);
+      console.log(`[KOMMO FULL SYNC] Obteniendo todos los leads con todos sus campos (etiquetas, contactos, empresas, etc.)...`);
+      console.log(`[KOMMO FULL SYNC] ⏳ Esto puede tardar varios minutos para grandes volúmenes de datos...`);
+      
+      // Obtener todos los leads con todos los campos relacionados
+      // El método getLeadsWithFilters ya incluye with=contacts,companies
+      const apiLeads = await kommoClient.getLeadsWithFilters({});
+      
+      console.log(`[KOMMO FULL SYNC] ✅ Leads obtenidos desde API: ${apiLeads.length}`);
+      console.log(`[KOMMO FULL SYNC] Iniciando guardado en MongoDB en lotes de 50...`);
+      console.log(`[KOMMO FULL SYNC] CustomerId que se usará: "${cleanCustomerId}" (length: ${cleanCustomerId.length})`);
+      
+      // Verificar que tenemos leads antes de sincronizar
+      if (apiLeads.length === 0) {
+        console.warn(`[KOMMO FULL SYNC] ⚠️  No se obtuvieron leads desde la API`);
+        return res.json({
+          success: true,
+          message: 'No se encontraron leads en Kommo para sincronizar',
+          totalProcessed: 0,
+        });
+      }
 
-    // Procesar en background
-    (async () => {
-      try {
-        const kommoClient = createKommoClient(credentials);
-        
-        console.log(`[KOMMO FULL SYNC] Cliente de Kommo creado`);
-        console.log(`[KOMMO FULL SYNC] Obteniendo todos los leads con todos sus campos (etiquetas, contactos, empresas, etc.)...`);
-        
-        // Obtener todos los leads con todos los campos relacionados
-        // El método getLeadsWithFilters ya incluye with=contacts,companies
-        const apiLeads = await kommoClient.getLeadsWithFilters({});
-        
-        console.log(`[KOMMO FULL SYNC] ✅ Leads obtenidos desde API: ${apiLeads.length}`);
-        console.log(`[KOMMO FULL SYNC] Iniciando guardado en MongoDB...`);
-        console.log(`[KOMMO FULL SYNC] CustomerId que se usará: "${cleanCustomerId}" (length: ${cleanCustomerId.length})`);
-        
-        // Verificar que tenemos leads antes de sincronizar
-        if (apiLeads.length === 0) {
-          console.warn(`[KOMMO FULL SYNC] ⚠️  No se obtuvieron leads desde la API`);
-          return;
-        }
+      // Sincronizar con forceFullSync=true para asegurar que todos los campos se guarden
+      // ESTO PROCESARÁ TODOS LOS LEADS EN LOTES DE 50 ANTES DE RESPONDER
+      console.log(`[KOMMO FULL SYNC] Llamando a syncKommoLeads con forceFullSync=true...`);
+      console.log(`[KOMMO FULL SYNC] Procesando ${apiLeads.length} leads en lotes de 50 (aprox. ${Math.ceil(apiLeads.length / 50)} lotes)...`);
+      
+      const startTime = Date.now();
+      const result = await syncKommoLeads(cleanCustomerId, apiLeads, true);
+      const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
+      
+      console.log(`[KOMMO FULL SYNC] ✅ Sincronización completada exitosamente en ${totalTime}s:`, {
+        totalProcessed: result.totalProcessed,
+        newLeads: result.newLeads,
+        updatedLeads: result.updatedLeads,
+        deletedLeads: result.deletedLeads,
+        errors: result.errors,
+        duration: `${result.duration}s`,
+      });
+      
+      // Verificar que los leads se guardaron correctamente
+      const { getKommoLeadsFromDb } = await import('../../lib/kommo-leads-storage.js');
+      const { total, totalAll } = await getKommoLeadsFromDb(cleanCustomerId, { limit: 1 });
+      console.log(`[KOMMO FULL SYNC] Verificación en BD:`);
+      console.log(`[KOMMO FULL SYNC]   - Total activos: ${total}`);
+      console.log(`[KOMMO FULL SYNC]   - Total todos: ${totalAll}`);
+      console.log(`[KOMMO FULL SYNC] ==========================================`);
 
-        // Sincronizar con forceFullSync=true para asegurar que todos los campos se guarden
-        console.log(`[KOMMO FULL SYNC] Llamando a syncKommoLeads con forceFullSync=true...`);
-        const result = await syncKommoLeads(cleanCustomerId, apiLeads, true);
-        
-        console.log(`[KOMMO FULL SYNC] ✅ Sincronización completada exitosamente:`, {
+      // Responder SOLO después de que todo se haya procesado
+      return res.json({
+        success: true,
+        message: `Sincronización completa finalizada exitosamente. ${result.totalProcessed} leads procesados en ${totalTime}s`,
+        data: {
           totalProcessed: result.totalProcessed,
           newLeads: result.newLeads,
           updatedLeads: result.updatedLeads,
           deletedLeads: result.deletedLeads,
           errors: result.errors,
-          duration: `${result.duration}s`,
-        });
-        
-        // Verificar que los leads se guardaron correctamente
-        const { getKommoLeadsFromDb } = await import('../../lib/kommo-leads-storage.js');
-        const { total, totalAll } = await getKommoLeadsFromDb(cleanCustomerId, { limit: 1 });
-        console.log(`[KOMMO FULL SYNC] Verificación en BD:`);
-        console.log(`[KOMMO FULL SYNC]   - Total activos: ${total}`);
-        console.log(`[KOMMO FULL SYNC]   - Total todos: ${totalAll}`);
-        console.log(`[KOMMO FULL SYNC] ==========================================`);
-      } catch (syncError: any) {
-        console.error(`[KOMMO FULL SYNC] ❌ Error durante la sincronización:`, syncError);
-        console.error(`[KOMMO FULL SYNC] Error message: ${syncError.message}`);
-        console.error(`[KOMMO FULL SYNC] Stack trace:`, syncError.stack);
-        console.log(`[KOMMO FULL SYNC] ==========================================`);
-      }
-    })();
+          duration: result.duration,
+          totalInDb: total,
+          totalAllInDb: totalAll,
+        },
+      });
+    } catch (syncError: any) {
+      console.error(`[KOMMO FULL SYNC] ❌ Error durante la sincronización:`, syncError);
+      console.error(`[KOMMO FULL SYNC] Error message: ${syncError.message}`);
+      console.error(`[KOMMO FULL SYNC] Stack trace:`, syncError.stack);
+      console.log(`[KOMMO FULL SYNC] ==========================================`);
+      
+      return res.status(500).json({
+        success: false,
+        error: syncError.message || 'Error durante la sincronización',
+        details: process.env.NODE_ENV === 'development' ? syncError.stack : undefined,
+      });
+    }
 
   } catch (error: any) {
     console.error('[KOMMO FULL SYNC] ❌ Error al iniciar sincronización completa:', error);
