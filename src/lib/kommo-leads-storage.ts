@@ -113,11 +113,11 @@ export async function syncKommoLeads(
       const cleanupResult = await collection.deleteMany({
         customerId: cleanCustomerId,
         $or: [
-          { id: { $eq: null } },
+          { id: { $eq: null as any } },
           { id: { $exists: false } },
           { id: { $type: 'null' } },
         ],
-      });
+      } as any);
       if (cleanupResult.deletedCount > 0) {
         console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id inválido eliminados`);
       }
@@ -146,12 +146,12 @@ export async function syncKommoLeads(
       const cleanupResult = await collection.deleteMany({
         customerId: cleanCustomerId,
         $or: [
-          { id: { $eq: null } },
+          { id: { $eq: null as any } },
           { id: { $exists: false } },
           { id: { $type: 'null' } },
           { id: { $type: 'undefined' } },
         ],
-      });
+      } as any);
       if (cleanupResult.deletedCount > 0) {
         console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id inválido eliminados`);
       }
@@ -297,11 +297,11 @@ export async function syncKommoLeads(
                 const cleanupResult = await collection.deleteMany({
                   customerId: cleanCustomerId,
                   $or: [
-                    { id: { $eq: null } },
+                    { id: { $eq: null as any } },
                     { id: { $exists: false } },
                     { id: { $type: 'null' } },
                   ],
-                });
+                } as any);
                 if (cleanupResult.deletedCount > 0) {
                   console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id null eliminados`);
                 }

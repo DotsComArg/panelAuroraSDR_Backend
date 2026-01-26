@@ -472,11 +472,11 @@ router.post('/kommo/leads/full-sync', async (req: Request, res: Response) => {
       const cleanupResult = await db.collection('kommo_leads').deleteMany({
         customerId: cleanCustomerId,
         $or: [
-          { id: { $eq: null } },
+          { id: { $eq: null as any } },
           { id: { $exists: false } },
           { id: { $type: 'null' } },
         ],
-      });
+      } as any);
       if (cleanupResult.deletedCount > 0) {
         console.log(`[KOMMO FULL SYNC] ✅ ${cleanupResult.deletedCount} documentos con id null eliminados`);
       }
