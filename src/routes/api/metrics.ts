@@ -100,7 +100,7 @@ router.get('/kommo', async (req: Request, res: Response) => {
     }
 
     // Si no se solicita refresh, intentar obtener estadísticas desde MongoDB primero (más rápido)
-    // Si no hay datos o se solicita refresh, obtener desde API
+    // Si no hay datos, devolver estadísticas vacías en lugar de cargar desde API (evita demoras)
     if (!refresh) {
       const { getKommoLeadsFromDb } = await import('../../lib/kommo-leads-storage.js');
       const { leads: dbLeads, totalAll } = await getKommoLeadsFromDb(customerId, {});
@@ -120,10 +120,30 @@ router.get('/kommo', async (req: Request, res: Response) => {
           success: true,
           data: stats,
         });
+      } else {
+        // Si no hay datos en BD, devolver estadísticas vacías (NO cargar desde API automáticamente)
+        // El usuario debe hacer clic en "Actualizar" para sincronizar
+        return res.json({
+          success: true,
+          data: {
+            totals: {
+              total: 0,
+              won: 0,
+              lost: 0,
+              active: 0,
+            },
+            pipelines: [],
+            users: [],
+            tags: [],
+            conversionRate: 0,
+            lossRate: 0,
+          },
+          needsSync: true, // Indicar que necesita sincronización
+        });
       }
     }
 
-    // Si no hay datos en BD o se solicita refresh, obtener desde API
+    // SOLO si se solicita refresh explícitamente, obtener desde API
     const kommoClient = createKommoClient(credentials);
     const stats = await kommoClient.getLeadsStats();
 
