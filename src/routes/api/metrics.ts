@@ -456,23 +456,47 @@ router.post('/kommo/leads/sync', async (req: Request, res: Response) => {
       });
     }
 
-    // Responder inmediatamente y sincronizar en background
+    // Iniciar la obtención de leads ANTES de responder para asegurar que el proceso se ejecute
+    // En Vercel/serverless, necesitamos que el proceso async se inicie antes de enviar la respuesta
+    console.log(`[KOMMO API] Iniciando proceso de sincronización para customerId: ${cleanCustomerId}`);
+    
+    const kommoClient = createKommoClient(credentials);
+    
+    // Iniciar la obtención de leads (esto puede tardar, pero al menos se inicia el proceso)
+    const leadsPromise = kommoClient.getLeadsWithFilters({});
+    
+    // Responder inmediatamente después de iniciar el proceso
     res.json({
       success: true,
-      message: 'Sincronización iniciada en background',
+      message: 'Sincronización iniciada. Los leads se están guardando en la base de datos.',
     });
-
-    // Sincronizar en background (no bloquear la respuesta)
+    
+    // Continuar con la sincronización en background
     (async () => {
       try {
-        const kommoClient = createKommoClient(credentials);
-        const apiLeads = await kommoClient.getLeadsWithFilters({});
+        console.log(`[KOMMO API] Esperando leads desde API de Kommo...`);
+        const apiLeads = await leadsPromise;
+        
+        console.log(`[KOMMO API] Leads obtenidos desde API: ${apiLeads.length}. Iniciando guardado en MongoDB...`);
         
         const result = await syncKommoLeads(cleanCustomerId, apiLeads, forceFullSync);
         
-        console.log(`[KOMMO API] Sincronización completada:`, result);
+        console.log(`[KOMMO API] ✅ Sincronización completada exitosamente para customerId ${cleanCustomerId}:`, {
+          totalProcessed: result.totalProcessed,
+          newLeads: result.newLeads,
+          updatedLeads: result.updatedLeads,
+          deletedLeads: result.deletedLeads,
+          errors: result.errors,
+          duration: `${result.duration}s`,
+        });
+        
+        // Verificar que los leads se guardaron correctamente
+        const { getKommoLeadsFromDb } = await import('../../lib/kommo-leads-storage.js');
+        const { total } = await getKommoLeadsFromDb(cleanCustomerId, { limit: 1 });
+        console.log(`[KOMMO API] Verificación: ${total} leads encontrados en BD para customerId ${cleanCustomerId}`);
       } catch (error: any) {
-        console.error('[KOMMO API] Error en sincronización background:', error);
+        console.error(`[KOMMO API] ❌ Error en sincronización para customerId ${cleanCustomerId}:`, error);
+        console.error('[KOMMO API] Stack trace:', error.stack);
       }
     })();
 
