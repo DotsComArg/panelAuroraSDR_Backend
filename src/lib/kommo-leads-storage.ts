@@ -41,14 +41,22 @@ export async function initializeKommoLeadsIndexes(): Promise<void> {
 
     // Índice compuesto para búsquedas por customerId y filtros comunes
     // IMPORTANTE: El índice debe permitir nulls o usar sparse index
-    // Primero eliminar el índice existente si tiene problemas
-    try {
-      await collection.dropIndex('customerId_leadId_unique');
-      console.log('[KOMMO STORAGE] Índice antiguo eliminado');
-    } catch (error: any) {
-      // El índice puede no existir, está bien
-      if (!error.message?.includes('index not found')) {
-        console.warn('[KOMMO STORAGE] Error al eliminar índice antiguo:', error.message);
+    // Primero eliminar TODOS los índices antiguos que puedan causar problemas
+    const indexesToDrop = [
+      'customerId_leadId_unique',
+      'customerId_1_leadId_1',  // Índice antiguo que usa leadId
+      'customerId_1_id_1'        // Otro posible índice antiguo
+    ];
+    
+    for (const indexName of indexesToDrop) {
+      try {
+        await collection.dropIndex(indexName);
+        console.log(`[KOMMO STORAGE] Índice antiguo eliminado: ${indexName}`);
+      } catch (error: any) {
+        // El índice puede no existir, está bien
+        if (!error.message?.includes('index not found')) {
+          console.warn(`[KOMMO STORAGE] Error al eliminar índice ${indexName}:`, error.message);
+        }
       }
     }
     
@@ -107,19 +115,22 @@ export async function syncKommoLeads(
     console.log(`[KOMMO STORAGE] Total leads a procesar: ${leads.length}`);
     console.log(`[KOMMO STORAGE] ForceFullSync: ${forceFullSync}`);
     
-    // Si es sincronización completa, limpiar documentos con id null o inválido primero
+    // Si es sincronización completa, limpiar documentos con id/leadId null o inválido primero
     if (forceFullSync) {
-      console.log(`[KOMMO STORAGE] Limpiando documentos con id null o inválido...`);
+      console.log(`[KOMMO STORAGE] Limpiando documentos con id/leadId null o inválido...`);
       const cleanupResult = await collection.deleteMany({
         customerId: cleanCustomerId,
         $or: [
           { id: { $eq: null as any } },
           { id: { $exists: false } },
           { id: { $type: 'null' } },
+          { leadId: { $eq: null as any } },  // También limpiar leadId null (índice antiguo)
+          { leadId: { $exists: false } },
+          { leadId: { $type: 'null' } },
         ],
       } as any);
       if (cleanupResult.deletedCount > 0) {
-        console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id inválido eliminados`);
+        console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id/leadId inválido eliminados`);
       }
     }
     
@@ -139,9 +150,9 @@ export async function syncKommoLeads(
     console.log(`[KOMMO STORAGE] LastSyncTime: ${lastSyncTime ? new Date(lastSyncTime).toISOString() : 'Nunca'}`);
     console.log(`[KOMMO STORAGE] IsFullSync: ${isFullSync}`);
 
-    // SIEMPRE limpiar documentos con id null o inválido antes de procesar
-    // Esto previene errores de índice único
-    console.log(`[KOMMO STORAGE] Limpiando documentos con id null o inválido para este customerId...`);
+    // SIEMPRE limpiar documentos con id/leadId null o inválido antes de procesar
+    // Esto previene errores de índice único (tanto el nuevo índice con 'id' como el antiguo con 'leadId')
+    console.log(`[KOMMO STORAGE] Limpiando documentos con id/leadId null o inválido para este customerId...`);
     try {
       const cleanupResult = await collection.deleteMany({
         customerId: cleanCustomerId,
@@ -150,13 +161,17 @@ export async function syncKommoLeads(
           { id: { $exists: false } },
           { id: { $type: 'null' } },
           { id: { $type: 'undefined' } },
+          { leadId: { $eq: null as any } },  // También limpiar leadId null (índice antiguo)
+          { leadId: { $exists: false } },
+          { leadId: { $type: 'null' } },
+          { leadId: { $type: 'undefined' } },
         ],
       } as any);
       if (cleanupResult.deletedCount > 0) {
-        console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id inválido eliminados`);
+        console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id/leadId inválido eliminados`);
       }
     } catch (cleanupError: any) {
-      console.warn(`[KOMMO STORAGE] ⚠️  Error al limpiar documentos con id null:`, cleanupError.message);
+      console.warn(`[KOMMO STORAGE] ⚠️  Error al limpiar documentos con id/leadId null:`, cleanupError.message);
       // Continuar de todas formas
     }
 
@@ -317,9 +332,9 @@ export async function syncKommoLeads(
             console.error(`[KOMMO STORAGE] ⚠️  Error de ${errorType} en bulkWrite lote ${batchNumber}. Procesando individualmente...`);
             console.error(`[KOMMO STORAGE] Error code: ${bulkError.code}, message: ${bulkError.message?.substring(0, 200)}`);
             
-            // Siempre limpiar documentos con id null antes de procesar individualmente
-            // Esto previene errores de índice único
-            console.log(`[KOMMO STORAGE] Limpiando documentos con id null antes de procesar individualmente...`);
+            // Siempre limpiar documentos con id/leadId null antes de procesar individualmente
+            // Esto previene errores de índice único (tanto el nuevo índice con 'id' como el antiguo con 'leadId')
+            console.log(`[KOMMO STORAGE] Limpiando documentos con id/leadId null antes de procesar individualmente...`);
             try {
               const cleanupResult = await collection.deleteMany({
                 customerId: cleanCustomerId,
@@ -327,13 +342,16 @@ export async function syncKommoLeads(
                   { id: { $eq: null as any } },
                   { id: { $exists: false } },
                   { id: { $type: 'null' } },
+                  { leadId: { $eq: null as any } },  // También limpiar leadId null (índice antiguo)
+                  { leadId: { $exists: false } },
+                  { leadId: { $type: 'null' } },
                 ],
               } as any);
               if (cleanupResult.deletedCount > 0) {
-                console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id null eliminados`);
+                console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id/leadId null eliminados`);
               }
             } catch (cleanupError: any) {
-              console.warn(`[KOMMO STORAGE] ⚠️  Error al limpiar documentos con id null:`, cleanupError.message);
+              console.warn(`[KOMMO STORAGE] ⚠️  Error al limpiar documentos con id/leadId null:`, cleanupError.message);
             }
             
             // Solo procesar individualmente si es error de duplicado o si el error es recuperable
@@ -398,10 +416,21 @@ export async function syncKommoLeads(
                   }
                 } catch (individualError: any) {
                   if (individualError.code === 11000) {
-                    // Si es error de duplicado, intentar actualizar en lugar de insertar
-                    // Esto puede pasar si hay un documento con id null que causa conflicto
+                    // Si es error de duplicado, puede ser por el índice antiguo con leadId
+                    // Primero limpiar documentos con leadId null para este lead específico
+                    console.warn(`[KOMMO STORAGE] ⚠️  Error de duplicado para lead ${leadId}. Limpiando documentos problemáticos...`);
                     try {
-                      // Intentar actualizar directamente sin upsert
+                      // Eliminar cualquier documento con id o leadId null para este customerId y leadId
+                      await collection.deleteMany({
+                        customerId: cleanCustomerId,
+                        $or: [
+                          { id: leadId, leadId: { $eq: null as any } },
+                          { leadId: leadId, id: { $eq: null as any } },
+                          { id: { $eq: null as any }, leadId: { $eq: null as any } },
+                        ],
+                      } as any);
+                      
+                      // Intentar actualizar directamente sin upsert primero
                       const updateResult = await collection.updateOne(
                         op.updateOne.filter,
                         op.updateOne.update
@@ -409,9 +438,11 @@ export async function syncKommoLeads(
                       if (updateResult.modifiedCount > 0) {
                         updatedLeads++;
                         individualSuccess++;
+                        console.log(`[KOMMO STORAGE] ✅ Lead ${leadId} actualizado después de limpiar duplicados`);
                       } else if (updateResult.matchedCount > 0) {
                         // El documento existe y no cambió, pero está en la BD (éxito)
                         individualSuccess++;
+                        console.log(`[KOMMO STORAGE] ✅ Lead ${leadId} ya existe en BD (sin cambios)`);
                       } else {
                         // El documento no existe - intentar insertar con upsert
                         const insertResult = await collection.updateOne(
@@ -422,21 +453,26 @@ export async function syncKommoLeads(
                         if (insertResult.upsertedCount > 0) {
                           newLeads++;
                           individualSuccess++;
+                          console.log(`[KOMMO STORAGE] ✅ Lead ${leadId} insertado después de limpiar duplicados`);
                         } else if (insertResult.modifiedCount > 0) {
                           updatedLeads++;
                           individualSuccess++;
+                          console.log(`[KOMMO STORAGE] ✅ Lead ${leadId} actualizado después de limpiar duplicados`);
+                        } else if (insertResult.matchedCount > 0) {
+                          individualSuccess++;
+                          console.log(`[KOMMO STORAGE] ✅ Lead ${leadId} ya existe en BD`);
                         } else {
-                          console.warn(`[KOMMO STORAGE] ⚠️  Lead ${op.updateOne.filter.id} no pudo ser procesado después de múltiples intentos`);
+                          console.warn(`[KOMMO STORAGE] ⚠️  Lead ${leadId} no pudo ser procesado después de múltiples intentos (matched: ${insertResult.matchedCount}, modified: ${insertResult.modifiedCount}, upserted: ${insertResult.upsertedCount})`);
                           individualErrors++;
                         }
                       }
                     } catch (retryError: any) {
-                      // Si aún falla, simplemente continuar
-                      console.warn(`[KOMMO STORAGE] ⚠️  Lead ${op.updateOne.filter.id} no pudo ser procesado, continuando...`);
+                      // Si aún falla, loguear el error completo para debugging
+                      console.error(`[KOMMO STORAGE] ❌ Lead ${leadId} no pudo ser procesado después de limpiar duplicados. Error: ${retryError.message}, Code: ${retryError.code}`);
                       individualErrors++;
                     }
                   } else {
-                    console.error(`[KOMMO STORAGE] Error individual para lead ${op.updateOne.filter.id}:`, individualError.message);
+                    console.error(`[KOMMO STORAGE] Error individual para lead ${op.updateOne.filter.id}:`, individualError.message, `Code: ${individualError.code}`);
                     individualErrors++;
                     errors++;
                   }

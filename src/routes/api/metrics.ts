@@ -464,24 +464,44 @@ router.post('/kommo/leads/full-sync', async (req: Request, res: Response) => {
     console.log(`[KOMMO FULL SYNC] BaseUrl: ${credentials.baseUrl}`);
     console.log(`[KOMMO FULL SYNC] HasAccessToken: ${!!credentials.accessToken}`);
 
-    // Limpiar documentos con id null ANTES de empezar (importante para evitar errores de índice único)
-    console.log(`[KOMMO FULL SYNC] Limpiando documentos con id null en la BD...`);
+    // Limpiar documentos con id/leadId null ANTES de empezar (importante para evitar errores de índice único)
+    // También eliminar el índice antiguo si existe
+    console.log(`[KOMMO FULL SYNC] Limpiando índices antiguos y documentos con id/leadId null en la BD...`);
     try {
       const { getMongoDb } = await import('../../lib/mongodb.js');
       const db = await getMongoDb();
-      const cleanupResult = await db.collection('kommo_leads').deleteMany({
+      const collection = db.collection('kommo_leads');
+      
+      // Eliminar índices antiguos que puedan causar problemas
+      const indexesToDrop = ['customerId_1_leadId_1', 'customerId_1_id_1'];
+      for (const indexName of indexesToDrop) {
+        try {
+          await collection.dropIndex(indexName);
+          console.log(`[KOMMO FULL SYNC] ✅ Índice antiguo eliminado: ${indexName}`);
+        } catch (error: any) {
+          if (!error.message?.includes('index not found')) {
+            console.warn(`[KOMMO FULL SYNC] ⚠️  Error al eliminar índice ${indexName}:`, error.message);
+          }
+        }
+      }
+      
+      // Limpiar documentos con id/leadId null
+      const cleanupResult = await collection.deleteMany({
         customerId: cleanCustomerId,
         $or: [
           { id: { $eq: null as any } },
           { id: { $exists: false } },
           { id: { $type: 'null' } },
+          { leadId: { $eq: null as any } },  // También limpiar leadId null (índice antiguo)
+          { leadId: { $exists: false } },
+          { leadId: { $type: 'null' } },
         ],
       } as any);
       if (cleanupResult.deletedCount > 0) {
-        console.log(`[KOMMO FULL SYNC] ✅ ${cleanupResult.deletedCount} documentos con id null eliminados`);
+        console.log(`[KOMMO FULL SYNC] ✅ ${cleanupResult.deletedCount} documentos con id/leadId null eliminados`);
       }
     } catch (cleanupError: any) {
-      console.warn(`[KOMMO FULL SYNC] ⚠️  Error al limpiar documentos con id null:`, cleanupError.message);
+      console.warn(`[KOMMO FULL SYNC] ⚠️  Error al limpiar documentos con id/leadId null:`, cleanupError.message);
       // Continuar de todas formas
     }
 
