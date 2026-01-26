@@ -188,24 +188,28 @@ export async function syncKommoLeads(
       console.warn(`[KOMMO STORAGE] ⚠️  ${leads.length - validLeads.length} leads fueron descartados por no tener id válido`);
     }
 
-    // Crear un mapa de leads existentes para comparación rápida
+    // En full sync, no necesitamos cargar leads existentes porque procesaremos todos
+    // Esto ahorra tiempo y memoria para grandes volúmenes de datos
     const existingLeadsMap = new Map<number, StoredKommoLead>();
-    if (!isFullSync) {
-      const existingLeads = await collection
-        .find({ customerId: cleanCustomerId })
-        .toArray() as StoredKommoLead[];
-      
-      existingLeads.forEach((lead: StoredKommoLead) => {
-        if (lead.id != null && typeof lead.id === 'number' && !isNaN(lead.id) && lead.id > 0) {
-          existingLeadsMap.set(lead.id, lead);
-        }
-      });
-    }
+    // Solo cargar leads existentes si NO es full sync (para comparar modificaciones)
+    // if (!isFullSync) {
+    //   const existingLeads = await collection
+    //     .find({ customerId: cleanCustomerId })
+    //     .toArray() as StoredKommoLead[];
+    //   
+    //   existingLeads.forEach((lead: StoredKommoLead) => {
+    //     if (lead.id != null && typeof lead.id === 'number' && !isNaN(lead.id) && lead.id > 0) {
+    //       existingLeadsMap.set(lead.id, lead);
+    //     }
+    //   });
+    // }
 
     // Procesar leads en lotes pequeños para máxima confiabilidad
     // Lotes de 50 aseguran que cada operación sea rápida y confiable
     const batchSize = 50;
     const now = new Date();
+    
+    console.log(`[KOMMO STORAGE] Iniciando procesamiento de ${validLeads.length} leads en lotes de ${batchSize} (${Math.ceil(validLeads.length / batchSize)} lotes totales)`);
 
     for (let i = 0; i < validLeads.length; i += batchSize) {
       const batch = validLeads.slice(i, i + batchSize);
@@ -224,54 +228,43 @@ export async function syncKommoLeads(
             continue;
           }
 
-          const existingLead = existingLeadsMap.get(lead.id);
+          // En full sync, siempre procesar todos los leads
+          // No necesitamos verificar si existe porque upsert lo maneja
           const leadLastModified = lead.updated_at * 1000; // Convertir a milisegundos
 
-          // Determinar si el lead es nuevo o modificado
-          const isNew = !existingLead;
-          const isModified = existingLead && 
-            (leadLastModified > existingLead.lastModifiedAt.getTime() || 
-             lead.is_deleted !== existingLead.is_deleted);
+          const storedLead: StoredKommoLead = {
+            ...lead,
+            customerId: cleanCustomerId, // Asegurar que el customerId esté correctamente asignado
+            syncedAt: now,
+            lastModifiedAt: new Date(leadLastModified),
+          };
 
-          if (isNew || isModified || isFullSync) {
-            const storedLead: StoredKommoLead = {
-              ...lead,
-              customerId: cleanCustomerId, // Asegurar que el customerId esté correctamente asignado
-              syncedAt: now,
-              lastModifiedAt: new Date(leadLastModified),
-            };
-
-            // Verificar que el customerId se esté asignando correctamente
-            if (storedLead.customerId !== cleanCustomerId) {
-              console.error(`[KOMMO STORAGE] ⚠️  ERROR: customerId no coincide! Esperado: "${cleanCustomerId}", Obtenido: "${storedLead.customerId}"`);
-            }
-
-            // Verificar que el id esté presente y sea válido antes de crear la operación
-            if (!storedLead.id || storedLead.id === null || storedLead.id === undefined || typeof storedLead.id !== 'number' || isNaN(storedLead.id) || storedLead.id <= 0) {
-              console.error(`[KOMMO STORAGE] ⚠️  ERROR: Lead sin id válido después de procesar:`, {
-                name: storedLead.name,
-                customerId: storedLead.customerId,
-                id: storedLead.id,
-                idType: typeof storedLead.id,
-              });
-              errors++;
-              continue;
-            }
-
-            operations.push({
-              updateOne: {
-                filter: { customerId: cleanCustomerId, id: lead.id },
-                update: { $set: storedLead },
-                upsert: true,
-              },
+          // Verificar que el id esté presente y sea válido antes de crear la operación
+          if (!storedLead.id || storedLead.id === null || storedLead.id === undefined || typeof storedLead.id !== 'number' || isNaN(storedLead.id) || storedLead.id <= 0) {
+            console.error(`[KOMMO STORAGE] ⚠️  ERROR: Lead sin id válido después de procesar:`, {
+              name: storedLead.name,
+              customerId: storedLead.customerId,
+              id: storedLead.id,
+              idType: typeof storedLead.id,
             });
-
-            // Nota: Los contadores se actualizarán después del bulkWrite basándose en los resultados reales
-            // Esto es más preciso que contar antes de saber si realmente se insertó o actualizó
+            errors++;
+            continue;
           }
-        } catch (error) {
-          console.error(`[KOMMO STORAGE] Error procesando lead ${lead?.id}:`, error);
+
+          operations.push({
+            updateOne: {
+              filter: { customerId: cleanCustomerId, id: lead.id },
+              update: { $set: storedLead },
+              upsert: true,
+            },
+          });
+
+          // Nota: Los contadores se actualizarán después del bulkWrite basándose en los resultados reales
+          // Esto es más preciso que contar antes de saber si realmente se insertó o actualizó
+        } catch (error: any) {
+          console.error(`[KOMMO STORAGE] Error procesando lead ${lead?.id}:`, error?.message || error);
           errors++;
+          // Continuar con el siguiente lead
         }
       }
 
@@ -355,10 +348,26 @@ export async function syncKommoLeads(
                 individualSuccess++;
               } catch (individualError: any) {
                 if (individualError.code === 11000) {
-                  // Si es error de duplicado, simplemente continuar (el lead ya existe)
-                  console.warn(`[KOMMO STORAGE] ⚠️  Lead ${op.updateOne.filter.id} ya existe, saltando...`);
-                  individualErrors++;
-                  // No incrementar errors porque es un duplicado esperado
+                  // Si es error de duplicado, intentar actualizar en lugar de insertar
+                  // Esto puede pasar si hay un documento con id null que causa conflicto
+                  try {
+                    // Intentar actualizar directamente sin upsert
+                    const updateResult = await collection.updateOne(
+                      op.updateOne.filter,
+                      op.updateOne.update
+                    );
+                    if (updateResult.modifiedCount > 0) {
+                      updatedLeads++;
+                      individualSuccess++;
+                    } else {
+                      // Si no se modificó, el documento ya existe y está actualizado
+                      individualErrors++;
+                    }
+                  } catch (retryError: any) {
+                    // Si aún falla, simplemente continuar
+                    console.warn(`[KOMMO STORAGE] ⚠️  Lead ${op.updateOne.filter.id} no pudo ser procesado, continuando...`);
+                    individualErrors++;
+                  }
                 } else {
                   console.error(`[KOMMO STORAGE] Error individual para lead ${op.updateOne.filter.id}:`, individualError.message);
                   individualErrors++;
@@ -367,14 +376,27 @@ export async function syncKommoLeads(
               }
             }
             
-            console.log(`[KOMMO STORAGE] Procesamiento individual lote ${batchNumber}: ${individualSuccess} exitosos, ${individualErrors} errores`);
+            console.log(`[KOMMO STORAGE] ✅ Procesamiento individual lote ${batchNumber} completado: ${individualSuccess} exitosos, ${individualErrors} saltados/errores`);
           } else {
-            console.error(`[KOMMO STORAGE] Error en bulkWrite lote ${batchNumber}:`, bulkError.message);
+            console.error(`[KOMMO STORAGE] ⚠️  Error en bulkWrite lote ${batchNumber}:`, bulkError.message);
             // Continuar con el siguiente lote en lugar de lanzar error
             console.warn(`[KOMMO STORAGE] Continuando con el siguiente lote...`);
             errors += operations.length;
           }
+        } catch (unexpectedError: any) {
+          // Capturar cualquier error inesperado y continuar
+          console.error(`[KOMMO STORAGE] ❌ Error inesperado en lote ${batchNumber}:`, unexpectedError.message);
+          console.error(`[KOMMO STORAGE] Stack:`, unexpectedError.stack);
+          errors += operations.length;
+          // IMPORTANTE: Continuar con el siguiente lote
         }
+      }
+      
+      // Log de progreso cada 10 lotes para no saturar los logs
+      if ((i / batchSize) % 10 === 0 || i + batchSize >= validLeads.length) {
+        const processed = Math.min(i + batchSize, validLeads.length);
+        const progress = Math.round((processed / validLeads.length) * 100);
+        console.log(`[KOMMO STORAGE] 📊 Progreso: ${processed}/${validLeads.length} leads procesados (${progress}%)`);
       }
     }
 
