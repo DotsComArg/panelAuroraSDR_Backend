@@ -99,10 +99,32 @@ router.get('/kommo', async (req: Request, res: Response) => {
       });
     }
 
-    // Crear cliente de Kommo
-    const kommoClient = createKommoClient(credentials);
+    // Si no se solicita refresh, intentar obtener estadísticas desde MongoDB primero (más rápido)
+    // Si no hay datos o se solicita refresh, obtener desde API
+    if (!refresh) {
+      const { getKommoLeadsFromDb } = await import('../../lib/kommo-leads-storage.js');
+      const { leads: dbLeads, totalAll } = await getKommoLeadsFromDb(customerId, {});
+      
+      // Si hay datos en BD, calcular estadísticas desde ahí (más rápido)
+      if (dbLeads.length > 0 && totalAll > 0) {
+        const kommoClient = createKommoClient(credentials);
+        const stats = await kommoClient.getFilteredLeadsStats(dbLeads);
+        
+        // Asegurar que el total incluya todos los leads (incluyendo eliminados si están en BD)
+        // Si totalAll es mayor que el total calculado, usar totalAll
+        if (totalAll > stats.totals.total) {
+          stats.totals.total = totalAll;
+        }
+        
+        return res.json({
+          success: true,
+          data: stats,
+        });
+      }
+    }
 
-    // Obtener estadísticas
+    // Si no hay datos en BD o se solicita refresh, obtener desde API
+    const kommoClient = createKommoClient(credentials);
     const stats = await kommoClient.getLeadsStats();
 
     return res.json({
@@ -319,6 +341,9 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     // Obtener última sincronización
     const lastSync = await getLastSyncTime(customerId);
 
+    // Si no hay datos y no se solicitó refresh, indicar que necesita sincronización
+    const needsSync = total === 0 && !refresh && !lastSync;
+
     return res.json({
       success: true,
       data: { 
@@ -328,6 +353,7 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
         limit,
         totalPages: Math.ceil(total / limit),
         lastSync: lastSync?.toISOString() || null,
+        needsSync, // Flag para indicar que necesita sincronización
       },
     });
   } catch (error: any) {

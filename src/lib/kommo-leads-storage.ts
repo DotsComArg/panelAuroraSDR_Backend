@@ -264,7 +264,10 @@ export async function getKommoLeadsFromDb(
       query['_embedded.tags.id'] = { $in: filters.tagIds };
     }
 
-    // Obtener total antes de aplicar paginación
+    // Obtener total ANTES de aplicar filtro de is_deleted (para incluir todos los leads)
+    const totalAllLeads = await collection.countDocuments({ customerId });
+    
+    // Obtener total de leads activos (sin eliminados) para la respuesta
     const total = await collection.countDocuments(query);
 
     // Aplicar paginación
@@ -289,7 +292,11 @@ export async function getKommoLeadsFromDb(
       return cleanLead as KommoLead;
     });
 
-    return { leads: cleanLeads, total };
+    return { 
+      leads: cleanLeads, 
+      total, // Total de leads activos (sin eliminados) - para paginación
+      totalAll: totalAllLeads // Total de TODOS los leads (incluyendo eliminados) - para estadísticas
+    };
   } catch (error) {
     console.error('[KOMMO STORAGE] Error al obtener leads de BD:', error);
     throw error;

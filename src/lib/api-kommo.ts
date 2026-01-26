@@ -932,7 +932,8 @@ class KommoApiClient {
     })
 
     // Calcular totales usando la clasificación por pipeline
-    const totalLeads = activeLeads.length
+    // El TOTAL debe incluir TODOS los leads (incluyendo eliminados), no solo los activos
+    const totalLeads = leads.length // Todos los leads, incluyendo eliminados
     const wonLeads = activeLeads.filter((lead) => {
       const pipelineWonLost = wonLostByPipeline.get(lead.pipeline_id)
       return pipelineWonLost?.wonStatusIds.has(lead.status_id) ?? false
@@ -1115,10 +1116,10 @@ class KommoApiClient {
 
     return {
       totals: {
-        total: totalLeads,
+        total: totalLeads, // Total incluye TODOS los leads (incluyendo eliminados)
         won: wonLeads.length,
         lost: lostLeads.length,
-        active: totalLeads - wonLeads.length - lostLeads.length,
+        active: activeLeads.length - wonLeads.length - lostLeads.length, // Activos = activos - won - lost
       },
       distribution: pipelineDistribution,
       lastUpdated: new Date().toISOString(),
@@ -1299,7 +1300,7 @@ class KommoApiClient {
     })
 
     // Calcular totales usando la clasificación por pipeline
-    const totalLeads = activeLeads.length
+    // totalLeads ya está definido arriba como leads.length (todos los leads, incluyendo eliminados)
     const wonLeads = activeLeads.filter((lead) => {
       const pipelineWonLost = wonLostByPipeline.get(lead.pipeline_id)
       return pipelineWonLost?.wonStatusIds.has(lead.status_id) ?? false
@@ -1381,10 +1382,10 @@ class KommoApiClient {
 
     return {
       totals: {
-        total: totalLeads,
+        total: totalLeads, // Total incluye TODOS los leads (incluyendo eliminados)
         won: wonLeads.length,
         lost: lostLeads.length,
-        active: totalLeads - wonLeads.length - lostLeads.length,
+        active: activeLeads.length - wonLeads.length - lostLeads.length, // Activos = activos - won - lost
       },
       distribution: pipelineDistribution,
       lastUpdated: new Date().toISOString(),
