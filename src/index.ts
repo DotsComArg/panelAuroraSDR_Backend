@@ -68,8 +68,8 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: [
     'Content-Type', 
-    'Authorization', 
-    'Cookie', 
+          'Authorization', 
+          'Cookie', 
     'X-Requested-With',
     'x-user-id',        // Header personalizado para autenticación
     'x-customer-id',    // Header personalizado para autenticación
