@@ -227,9 +227,24 @@ export async function getKommoLeadsFromDb(
     const db = await getMongoDb();
     const collection = db.collection<StoredKommoLead>('kommo_leads');
 
+    // Limpiar customerId para asegurar coincidencia exacta
+    const cleanCustomerId = customerId.trim();
+    
+    console.log(`[KOMMO STORAGE] Buscando leads para customerId: "${cleanCustomerId}" (length: ${cleanCustomerId.length})`);
+    
+    // Primero, verificar cuántos leads hay en total para este customerId
+    const sampleLead = await collection.findOne({ customerId: cleanCustomerId });
+    if (sampleLead) {
+      console.log(`[KOMMO STORAGE] Lead de muestra encontrado con customerId: "${sampleLead.customerId}" (length: ${sampleLead.customerId.length})`);
+    } else {
+      // Si no encuentra, intentar buscar todos los customerIds únicos para debug
+      const distinctCustomerIds = await collection.distinct('customerId');
+      console.log(`[KOMMO STORAGE] No se encontraron leads. CustomerIds únicos en BD:`, distinctCustomerIds.slice(0, 5));
+    }
+
     // Construir query
     const query: any = { 
-      customerId, 
+      customerId: cleanCustomerId, 
       is_deleted: { $ne: true } as any 
     };
 
@@ -265,7 +280,7 @@ export async function getKommoLeadsFromDb(
     }
 
     // Obtener total ANTES de aplicar filtro de is_deleted (para incluir todos los leads)
-    const totalAllLeads = await collection.countDocuments({ customerId });
+    const totalAllLeads = await collection.countDocuments({ customerId: cleanCustomerId });
     
     // Obtener total de leads activos (sin eliminados) para la respuesta
     const total = await collection.countDocuments(query);
@@ -311,8 +326,11 @@ export async function getLastSyncTime(customerId: string): Promise<Date | null> 
     const db = await getMongoDb();
     const collection = db.collection<StoredKommoLead>('kommo_leads');
 
+    // Limpiar customerId para asegurar coincidencia exacta
+    const cleanCustomerId = customerId.trim();
+
     const lastSync = await collection.findOne(
-      { customerId },
+      { customerId: cleanCustomerId },
       { sort: { syncedAt: -1 }, projection: { syncedAt: 1 } }
     );
 

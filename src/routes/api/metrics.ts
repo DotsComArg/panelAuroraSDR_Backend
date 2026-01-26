@@ -88,10 +88,13 @@ router.get('/kommo', async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`[KOMMO API] Obteniendo estadísticas para customerId: ${customerId}, refresh: ${refresh}`);
+    // Limpiar customerId
+    const cleanCustomerId = customerId.trim();
+    
+    console.log(`[KOMMO API] Obteniendo estadísticas para customerId: ${cleanCustomerId}, refresh: ${refresh}`);
 
     // Obtener credenciales del cliente
-    const credentials = await getKommoCredentialsForCustomer(customerId);
+    const credentials = await getKommoCredentialsForCustomer(cleanCustomerId);
     if (!credentials) {
       return res.status(404).json({
         success: false,
@@ -103,7 +106,7 @@ router.get('/kommo', async (req: Request, res: Response) => {
     // Si no hay datos, devolver estadísticas vacías en lugar de cargar desde API (evita demoras)
     if (!refresh) {
       const { getKommoLeadsFromDb } = await import('../../lib/kommo-leads-storage.js');
-      const { leads: dbLeads, totalAll } = await getKommoLeadsFromDb(customerId, {});
+      const { leads: dbLeads, totalAll } = await getKommoLeadsFromDb(cleanCustomerId, {});
       
       // Si hay datos en BD, calcular estadísticas desde ahí (más rápido)
       if (dbLeads.length > 0 && totalAll > 0) {
@@ -287,7 +290,11 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`[KOMMO API] Obteniendo leads para customerId: ${customerId}, refresh: ${refresh}`);
+    // Limpiar customerId (eliminar espacios y caracteres extra)
+    const cleanCustomerId = customerId.trim();
+    
+    console.log(`[KOMMO API] Obteniendo leads para customerId: ${cleanCustomerId}, refresh: ${refresh}`);
+    console.log(`[KOMMO API] CustomerId length: ${cleanCustomerId.length}, type: ${typeof cleanCustomerId}`);
 
     // Usar funciones de almacenamiento importadas
 
@@ -295,7 +302,7 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     if (refresh) {
       console.log(`[KOMMO API] Sincronizando leads desde API para customerId: ${customerId}...`);
       
-      const credentials = await getKommoCredentialsForCustomer(customerId);
+      const credentials = await getKommoCredentialsForCustomer(cleanCustomerId);
       if (!credentials) {
         return res.status(404).json({
           success: false,
@@ -309,7 +316,7 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
       const apiLeads = await kommoClient.getLeadsWithFilters({});
       
       // Sincronizar a BD
-      await syncKommoLeads(customerId, apiLeads, true);
+      await syncKommoLeads(cleanCustomerId, apiLeads, true);
       
       console.log(`[KOMMO API] Sincronización completada. Leads sincronizados: ${apiLeads.length}`);
     }
@@ -356,10 +363,12 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     filters.limit = limit;
 
     // Obtener leads desde BD (MUCHO más rápido)
-    const { leads, total, totalAll } = await getKommoLeadsFromDb(customerId, filters);
+    const { leads, total, totalAll } = await getKommoLeadsFromDb(cleanCustomerId, filters);
+    
+    console.log(`[KOMMO API] Leads encontrados: ${leads.length}, total: ${total}, totalAll: ${totalAll}`);
 
     // Obtener última sincronización
-    const lastSync = await getLastSyncTime(customerId);
+    const lastSync = await getLastSyncTime(cleanCustomerId);
 
     // Si no hay datos y no se solicitó refresh, indicar que necesita sincronización
     const needsSync = total === 0 && !refresh && !lastSync;
@@ -398,9 +407,12 @@ router.post('/kommo/leads/sync', async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`[KOMMO API] Iniciando sincronización de leads para customerId: ${customerId}`);
+    // Limpiar customerId
+    const cleanCustomerId = customerId.trim();
+    
+    console.log(`[KOMMO API] Iniciando sincronización de leads para customerId: ${cleanCustomerId}`);
 
-    const credentials = await getKommoCredentialsForCustomer(customerId);
+    const credentials = await getKommoCredentialsForCustomer(cleanCustomerId);
     if (!credentials) {
       return res.status(404).json({
         success: false,
@@ -420,7 +432,7 @@ router.post('/kommo/leads/sync', async (req: Request, res: Response) => {
         const kommoClient = createKommoClient(credentials);
         const apiLeads = await kommoClient.getLeadsWithFilters({});
         
-        const result = await syncKommoLeads(customerId, apiLeads, forceFullSync);
+        const result = await syncKommoLeads(cleanCustomerId, apiLeads, forceFullSync);
         
         console.log(`[KOMMO API] Sincronización completada:`, result);
       } catch (error: any) {
