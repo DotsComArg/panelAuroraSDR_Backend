@@ -80,9 +80,12 @@ export async function syncKommoLeads(
   let errors = 0;
 
   try {
+    // Limpiar customerId para asegurar coincidencia exacta
+    const cleanCustomerId = customerId.trim();
+    
     // Obtener el timestamp de la última sincronización
     const lastSync = await collection.findOne(
-      { customerId },
+      { customerId: cleanCustomerId },
       { sort: { syncedAt: -1 }, projection: { syncedAt: 1 } }
     );
 
@@ -97,7 +100,7 @@ export async function syncKommoLeads(
     const existingLeadsMap = new Map<number, StoredKommoLead>();
     if (!isFullSync) {
       const existingLeads = await collection
-        .find({ customerId })
+        .find({ customerId: cleanCustomerId })
         .toArray() as StoredKommoLead[];
       
       existingLeads.forEach((lead: StoredKommoLead) => {
@@ -127,14 +130,14 @@ export async function syncKommoLeads(
           if (isNew || isModified || isFullSync) {
             const storedLead: StoredKommoLead = {
               ...lead,
-              customerId,
+              customerId: cleanCustomerId,
               syncedAt: now,
               lastModifiedAt: new Date(leadLastModified),
             };
 
             operations.push({
               updateOne: {
-                filter: { customerId, id: lead.id },
+                filter: { customerId: cleanCustomerId, id: lead.id },
                 update: { $set: storedLead },
                 upsert: true,
               },
@@ -164,7 +167,7 @@ export async function syncKommoLeads(
       const apiLeadIds = new Set(leads.map(l => l.id));
       const deletedResult = await collection.updateMany(
         {
-          customerId,
+          customerId: cleanCustomerId,
           id: { $nin: Array.from(apiLeadIds) },
           is_deleted: { $ne: true } as any,
         },

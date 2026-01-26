@@ -282,6 +282,7 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
   try {
     const customerId = getQueryParam(req.query.customerId);
     const refresh = getQueryParam(req.query.refresh) === 'true';
+    const sync = getQueryParam(req.query.sync) === 'true'; // Nuevo parámetro para sincronizar a BD
 
     if (!customerId) {
       return res.status(400).json({
@@ -293,14 +294,13 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     // Limpiar customerId (eliminar espacios y caracteres extra)
     const cleanCustomerId = customerId.trim();
     
-    console.log(`[KOMMO API] Obteniendo leads para customerId: ${cleanCustomerId}, refresh: ${refresh}`);
+    console.log(`[KOMMO API] Obteniendo leads para customerId: ${cleanCustomerId}, refresh: ${refresh}, sync: ${sync}`);
     console.log(`[KOMMO API] CustomerId length: ${cleanCustomerId.length}, type: ${typeof cleanCustomerId}`);
 
-    // Usar funciones de almacenamiento importadas
-
-    // Si se solicita refresh, sincronizar primero
+    // Si se solicita refresh, obtener desde API de Kommo
+    let apiLeads: any[] = [];
     if (refresh) {
-      console.log(`[KOMMO API] Sincronizando leads desde API para customerId: ${customerId}...`);
+      console.log(`[KOMMO API] Obteniendo leads desde API de Kommo para customerId: ${cleanCustomerId}...`);
       
       const credentials = await getKommoCredentialsForCustomer(cleanCustomerId);
       if (!credentials) {
@@ -312,15 +312,50 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
 
       const kommoClient = createKommoClient(credentials);
       
-      // Obtener todos los leads desde la API (esto puede tardar, pero solo cuando se solicita refresh)
-      const apiLeads = await kommoClient.getLeadsWithFilters({});
+      // Obtener todos los leads desde la API
+      apiLeads = await kommoClient.getLeadsWithFilters({});
       
-      // Sincronizar a BD
-      await syncKommoLeads(cleanCustomerId, apiLeads, true);
+      console.log(`[KOMMO API] Leads obtenidos desde API: ${apiLeads.length}`);
       
-      console.log(`[KOMMO API] Sincronización completada. Leads sincronizados: ${apiLeads.length}`);
+      // Solo sincronizar a BD si se solicita explícitamente (sync=true)
+      if (sync) {
+        console.log(`[KOMMO API] Sincronizando leads a BD para customerId: ${cleanCustomerId}...`);
+        await syncKommoLeads(cleanCustomerId, apiLeads, true);
+        console.log(`[KOMMO API] Sincronización completada. Leads sincronizados: ${apiLeads.length}`);
+      } else {
+        console.log(`[KOMMO API] Leads obtenidos desde API pero NO sincronizados a BD (sync=false)`);
+      }
     }
 
+    // Si se obtuvo desde API (refresh=true), devolver esos leads directamente
+    if (refresh && apiLeads.length > 0) {
+      // Si no se especifica paginación o se solicita explícitamente todos, devolver todos los leads
+      const page = parseInt(getQueryParam(req.query.page) || '1', 10);
+      const limitParam = getQueryParam(req.query.limit);
+      const limit = limitParam ? parseInt(limitParam, 10) : apiLeads.length; // Si no hay limit, devolver todos
+      
+      // Si el limit es mayor o igual al total, devolver todos
+      const paginatedLeads = limit >= apiLeads.length 
+        ? apiLeads 
+        : apiLeads.slice((page - 1) * limit, page * limit);
+      
+      console.log(`[KOMMO API] Devolviendo ${paginatedLeads.length} de ${apiLeads.length} leads desde API`);
+      
+      return res.json({
+        success: true,
+        data: { 
+          leads: paginatedLeads,
+          total: apiLeads.length,
+          page,
+          limit,
+          totalPages: Math.ceil(apiLeads.length / limit),
+          lastSync: null,
+          needsSync: false,
+        },
+      });
+    }
+
+    // Si no se solicitó refresh, obtener desde BD (más rápido)
     // Construir filtros desde query params
     const filters: any = {};
 
@@ -445,6 +480,119 @@ router.post('/kommo/leads/sync', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Error al iniciar sincronización',
+    });
+  }
+});
+
+// Endpoint para verificar customerIds de leads y clientes
+router.get('/kommo/leads/check-customer-ids', async (req: Request, res: Response) => {
+  try {
+    const customerId = getQueryParam(req.query.customerId);
+    
+    if (!customerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'customerId es requerido',
+      });
+    }
+
+    const cleanCustomerId = customerId.trim();
+    const db = await getMongoDb();
+    const { ObjectId } = await import('mongodb');
+
+    // Verificar si el cliente existe
+    const customer = await db.collection('customers').findOne({
+      _id: new ObjectId(cleanCustomerId)
+    });
+
+    // Obtener todos los customerIds únicos de los leads
+    const kommoLeadsCollection = db.collection('kommo_leads');
+    const distinctCustomerIds = await kommoLeadsCollection.distinct('customerId');
+    
+    // Contar leads por customerId
+    const leadsByCustomerId: any = {};
+    for (const cid of distinctCustomerIds) {
+      const count = await kommoLeadsCollection.countDocuments({ customerId: cid });
+      leadsByCustomerId[cid] = count;
+    }
+
+    // Verificar si hay leads con el customerId del usuario
+    const leadsForCurrentCustomer = await kommoLeadsCollection.countDocuments({ 
+      customerId: cleanCustomerId 
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        currentCustomerId: cleanCustomerId,
+        customerExists: !!customer,
+        customerName: customer?.nombre || customer?.email || 'No encontrado',
+        leadsForCurrentCustomer,
+        allCustomerIdsInLeads: distinctCustomerIds,
+        leadsByCustomerId,
+      },
+    });
+  } catch (error: any) {
+    console.error('[KOMMO API] Error al verificar customerIds:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Error al verificar customerIds',
+    });
+  }
+});
+
+// Endpoint para migrar/actualizar customerId de leads existentes
+// Útil cuando los leads fueron sincronizados con un customerId incorrecto
+router.post('/kommo/leads/migrate-customer-id', async (req: Request, res: Response) => {
+  try {
+    const oldCustomerId = getQueryParam(req.body?.oldCustomerId || req.query.oldCustomerId);
+    const newCustomerId = getQueryParam(req.body?.newCustomerId || req.query.newCustomerId);
+
+    if (!oldCustomerId || !newCustomerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'oldCustomerId y newCustomerId son requeridos',
+      });
+    }
+
+    const cleanOldCustomerId = oldCustomerId.trim();
+    const cleanNewCustomerId = newCustomerId.trim();
+
+    console.log(`[KOMMO API] Migrando leads de customerId "${cleanOldCustomerId}" a "${cleanNewCustomerId}"`);
+
+    const db = await getMongoDb();
+    const collection = db.collection('kommo_leads');
+
+    // Contar leads con el customerId antiguo
+    const countOld = await collection.countDocuments({ customerId: cleanOldCustomerId });
+    console.log(`[KOMMO API] Leads encontrados con customerId antiguo: ${countOld}`);
+
+    if (countOld === 0) {
+      return res.json({
+        success: true,
+        message: 'No se encontraron leads con el customerId antiguo',
+        migrated: 0,
+      });
+    }
+
+    // Actualizar todos los leads
+    const result = await collection.updateMany(
+      { customerId: cleanOldCustomerId },
+      { $set: { customerId: cleanNewCustomerId } }
+    );
+
+    console.log(`[KOMMO API] Migración completada: ${result.modifiedCount} leads actualizados`);
+
+    return res.json({
+      success: true,
+      message: `Migración completada: ${result.modifiedCount} leads actualizados`,
+      migrated: result.modifiedCount,
+    });
+  } catch (error: any) {
+    console.error('[KOMMO API] Error al migrar customerId:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Error al migrar customerId de leads',
     });
   }
 });
