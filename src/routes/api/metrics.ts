@@ -17,6 +17,23 @@ const getQueryParam = (param: any): string | null => {
   return null;
 };
 
+/** Convierte dateFrom/dateTo a timestamp Unix en segundos. Acepta "YYYY-MM-DD" o número. */
+function parseDateToTimestamp(val: string | null | undefined, endOfDay = false): number | undefined {
+  if (val === null || val === undefined || val === '') return undefined;
+  const s = String(val).trim();
+  if (!s) return undefined;
+  // Si es solo dígitos, tratar como timestamp en segundos
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return undefined;
+  if (endOfDay) {
+    d.setHours(23, 59, 59, 999);
+  } else {
+    d.setHours(0, 0, 0, 0);
+  }
+  return Math.floor(d.getTime() / 1000);
+}
+
 // Obtener métricas generales del dashboard
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -360,17 +377,17 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     // Construir filtros desde query params
     const filters: any = {};
 
-    // Filtros de fecha
-    const dateFrom = getQueryParam(req.query.dateFrom);
-    const dateTo = getQueryParam(req.query.dateTo);
-    const closedDateFrom = getQueryParam(req.query.closedDateFrom);
-    const closedDateTo = getQueryParam(req.query.closedDateTo);
+    // Filtros de fecha (aceptar "YYYY-MM-DD" o timestamp en segundos)
+    const dateFromParam = getQueryParam(req.query.dateFrom);
+    const dateToParam = getQueryParam(req.query.dateTo);
+    const closedDateFromParam = getQueryParam(req.query.closedDateFrom);
+    const closedDateToParam = getQueryParam(req.query.closedDateTo);
     const dateField = getQueryParam(req.query.dateField) as 'created_at' | 'closed_at' | undefined;
 
-    if (dateFrom) filters.dateFrom = parseInt(dateFrom, 10);
-    if (dateTo) filters.dateTo = parseInt(dateTo, 10);
-    if (closedDateFrom) filters.closedDateFrom = parseInt(closedDateFrom, 10);
-    if (closedDateTo) filters.closedDateTo = parseInt(closedDateTo, 10);
+    if (dateFromParam) filters.dateFrom = parseDateToTimestamp(dateFromParam, false);
+    if (dateToParam) filters.dateTo = parseDateToTimestamp(dateToParam, true);
+    if (closedDateFromParam) filters.closedDateFrom = parseDateToTimestamp(closedDateFromParam, false);
+    if (closedDateToParam) filters.closedDateTo = parseDateToTimestamp(closedDateToParam, true);
     if (dateField) filters.dateField = dateField;
 
     // Filtros de usuario, pipeline, status
@@ -388,7 +405,8 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
       if (Array.isArray(tagIds)) {
         filters.tagIds = tagIds.map(id => parseInt(String(id), 10));
       } else {
-        filters.tagIds = [parseInt(String(tagIds), 10)];
+        const idsStr = String(tagIds).includes(',') ? String(tagIds).split(',') : [String(tagIds)];
+        filters.tagIds = idsStr.map(id => parseInt(id.trim(), 10)).filter(n => !isNaN(n));
       }
     }
 
@@ -403,23 +421,45 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     
     console.log(`[KOMMO API] Leads encontrados: ${leads.length}, total: ${total}, totalAll: ${totalAll}`);
 
+    // Si hay filtros activos, calcular y devolver estadísticas filtradas desde BD
+    const hasFilters = !!(filters.dateFrom || filters.dateTo || filters.closedDateFrom || filters.closedDateTo ||
+      filters.responsibleUserId || filters.pipelineId || filters.statusId || (filters.tagIds && filters.tagIds.length > 0));
+    let stats: any = undefined;
+    if (hasFilters) {
+      try {
+        const credentials = await getKommoCredentialsForCustomer(cleanCustomerId);
+        if (credentials) {
+          const statsFilters = { ...filters, skip: 0, limit: 50000 };
+          const { leads: allFilteredLeads } = await getKommoLeadsFromDb(cleanCustomerId, statsFilters);
+          const kommoClient = createKommoClient(credentials);
+          stats = await kommoClient.getFilteredLeadsStats(allFilteredLeads);
+          console.log(`[KOMMO API] Stats filtradas calculadas: total=${stats?.totals?.total}, won=${stats?.totals?.won}, lost=${stats?.totals?.lost}`);
+        }
+      } catch (statsErr: any) {
+        console.warn('[KOMMO API] No se pudieron calcular stats filtradas:', statsErr?.message || statsErr);
+      }
+    }
+
     // Obtener última sincronización
     const lastSync = await getLastSyncTime(cleanCustomerId);
 
     // Si no hay datos y no se solicitó refresh, indicar que necesita sincronización
     const needsSync = total === 0 && !refresh && !lastSync;
 
+    const data: any = { 
+      leads,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      lastSync: lastSync?.toISOString() || null,
+      needsSync,
+    };
+    if (stats) data.stats = stats;
+
     return res.json({
       success: true,
-      data: { 
-        leads,
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-        lastSync: lastSync?.toISOString() || null,
-        needsSync, // Flag para indicar que necesita sincronización
-      },
+      data,
     });
   } catch (error: any) {
     console.error('[KOMMO API] Error al obtener leads:', error);
