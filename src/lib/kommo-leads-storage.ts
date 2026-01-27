@@ -116,21 +116,31 @@ export async function syncKommoLeads(
     console.log(`[KOMMO STORAGE] ForceFullSync: ${forceFullSync}`);
     
     // Si es sincronización completa, limpiar documentos con id/leadId null o inválido primero
+    // IMPORTANTE: Solo eliminar si AMBOS campos son null, no si solo uno es null
+    // Esto previene eliminar leads válidos que tienen uno de los campos
     if (forceFullSync) {
-      console.log(`[KOMMO STORAGE] Limpiando documentos con id/leadId null o inválido...`);
+      console.log(`[KOMMO STORAGE] Limpiando documentos con id Y leadId ambos null o inválidos...`);
       const cleanupResult = await collection.deleteMany({
         customerId: cleanCustomerId,
-        $or: [
-          { id: { $eq: null as any } },
-          { id: { $exists: false } },
-          { id: { $type: 'null' } },
-          { leadId: { $eq: null as any } },  // También limpiar leadId null (índice antiguo)
-          { leadId: { $exists: false } },
-          { leadId: { $type: 'null' } },
+        $and: [
+          {
+            $or: [
+              { id: { $eq: null as any } },
+              { id: { $exists: false } },
+              { id: { $type: 'null' } },
+            ],
+          },
+          {
+            $or: [
+              { leadId: { $eq: null as any } },
+              { leadId: { $exists: false } },
+              { leadId: { $type: 'null' } },
+            ],
+          },
         ],
       } as any);
       if (cleanupResult.deletedCount > 0) {
-        console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id/leadId inválido eliminados`);
+        console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id Y leadId ambos inválidos eliminados`);
       }
     }
     
@@ -150,30 +160,9 @@ export async function syncKommoLeads(
     console.log(`[KOMMO STORAGE] LastSyncTime: ${lastSyncTime ? new Date(lastSyncTime).toISOString() : 'Nunca'}`);
     console.log(`[KOMMO STORAGE] IsFullSync: ${isFullSync}`);
 
-    // SIEMPRE limpiar documentos con id/leadId null o inválido antes de procesar
-    // Esto previene errores de índice único (tanto el nuevo índice con 'id' como el antiguo con 'leadId')
-    console.log(`[KOMMO STORAGE] Limpiando documentos con id/leadId null o inválido para este customerId...`);
-    try {
-      const cleanupResult = await collection.deleteMany({
-        customerId: cleanCustomerId,
-        $or: [
-          { id: { $eq: null as any } },
-          { id: { $exists: false } },
-          { id: { $type: 'null' } },
-          { id: { $type: 'undefined' } },
-          { leadId: { $eq: null as any } },  // También limpiar leadId null (índice antiguo)
-          { leadId: { $exists: false } },
-          { leadId: { $type: 'null' } },
-          { leadId: { $type: 'undefined' } },
-        ],
-      } as any);
-      if (cleanupResult.deletedCount > 0) {
-        console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id/leadId inválido eliminados`);
-      }
-    } catch (cleanupError: any) {
-      console.warn(`[KOMMO STORAGE] ⚠️  Error al limpiar documentos con id/leadId null:`, cleanupError.message);
-      // Continuar de todas formas
-    }
+    // NO limpiar documentos aquí - solo limpiar en forceFullSync y solo si AMBOS campos son null
+    // Esto previene eliminar leads válidos accidentalmente
+    console.log(`[KOMMO STORAGE] Saltando limpieza automática para evitar eliminar leads válidos`);
 
     // PRIMERO: Filtrar leads inválidos (sin id o id null/undefined/NaN)
     // Esto es crítico porque el índice único requiere que todos los leads tengan un id válido
@@ -332,27 +321,9 @@ export async function syncKommoLeads(
             console.error(`[KOMMO STORAGE] ⚠️  Error de ${errorType} en bulkWrite lote ${batchNumber}. Procesando individualmente...`);
             console.error(`[KOMMO STORAGE] Error code: ${bulkError.code}, message: ${bulkError.message?.substring(0, 200)}`);
             
-            // Siempre limpiar documentos con id/leadId null antes de procesar individualmente
-            // Esto previene errores de índice único (tanto el nuevo índice con 'id' como el antiguo con 'leadId')
-            console.log(`[KOMMO STORAGE] Limpiando documentos con id/leadId null antes de procesar individualmente...`);
-            try {
-              const cleanupResult = await collection.deleteMany({
-                customerId: cleanCustomerId,
-                $or: [
-                  { id: { $eq: null as any } },
-                  { id: { $exists: false } },
-                  { id: { $type: 'null' } },
-                  { leadId: { $eq: null as any } },  // También limpiar leadId null (índice antiguo)
-                  { leadId: { $exists: false } },
-                  { leadId: { $type: 'null' } },
-                ],
-              } as any);
-              if (cleanupResult.deletedCount > 0) {
-                console.log(`[KOMMO STORAGE] ✅ ${cleanupResult.deletedCount} documentos con id/leadId null eliminados`);
-              }
-            } catch (cleanupError: any) {
-              console.warn(`[KOMMO STORAGE] ⚠️  Error al limpiar documentos con id/leadId null:`, cleanupError.message);
-            }
+            // NO limpiar documentos aquí - solo limpiar si hay un error específico de duplicado con null
+            // Esto previene eliminar leads válidos accidentalmente
+            console.log(`[KOMMO STORAGE] Saltando limpieza automática para evitar eliminar leads válidos`);
             
             // Solo procesar individualmente si es error de duplicado o si el error es recuperable
             if (isDuplicateError || bulkError.code === 11000) {
@@ -548,8 +519,12 @@ export async function syncKommoLeads(
     }
 
     // Marcar como eliminados los leads que ya no están en la API
-    // Solo si es sincronización completa
-    if (isFullSync) {
+    // IMPORTANTE: Solo hacer esto si TODOS los leads se procesaron exitosamente
+    // Si el proceso se interrumpe (timeout, error), NO marcar como eliminados
+    // porque podríamos estar marcando leads válidos que simplemente no se procesaron aún
+    if (isFullSync && errors === 0 && newLeads + updatedLeads >= validLeads.length * 0.95) {
+      // Solo marcar como eliminados si procesamos al menos el 95% de los leads sin errores
+      // Esto previene marcar como eliminados leads válidos si el proceso se interrumpe
       const apiLeadIds = new Set(validLeads.map(l => l.id).filter(id => id != null));
       console.log(`[KOMMO STORAGE] Marcando como eliminados leads que ya no están en la API. IDs válidos: ${apiLeadIds.size}`);
       const deletedResult = await collection.updateMany(
@@ -568,6 +543,8 @@ export async function syncKommoLeads(
       );
       deletedLeads = deletedResult.modifiedCount;
       console.log(`[KOMMO STORAGE] ${deletedLeads} leads marcados como eliminados`);
+    } else if (isFullSync) {
+      console.log(`[KOMMO STORAGE] ⚠️  NO se marcarán leads como eliminados porque el proceso puede estar incompleto (errores: ${errors}, procesados: ${newLeads + updatedLeads}/${validLeads.length})`);
     }
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
