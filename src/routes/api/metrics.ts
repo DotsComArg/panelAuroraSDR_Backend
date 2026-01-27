@@ -470,6 +470,50 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
   }
 });
 
+// Endpoint de diagnóstico: trae UN lead completo desde la API de Kommo para ver la estructura (custom_fields_values, fuente, etiquetas, etc.)
+router.get('/kommo/leads/sample', async (req: Request, res: Response) => {
+  try {
+    const customerId = getQueryParam(req.query.customerId);
+    if (!customerId) {
+      return res.status(400).json({ success: false, error: 'customerId es requerido' });
+    }
+    const cleanCustomerId = customerId.trim();
+    const credentials = await getKommoCredentialsForCustomer(cleanCustomerId);
+    if (!credentials) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cliente no encontrado o sin credenciales Kommo',
+      });
+    }
+    const kommoClient = createKommoClient(credentials);
+    const listLeads = await kommoClient.getLeadsWithFilters({});
+    if (!listLeads.length) {
+      return res.json({
+        success: true,
+        message: 'No hay leads en esta cuenta',
+        data: { lead: null, fromList: [], listCount: 0 },
+      });
+    }
+    const firstId = listLeads[0].id;
+    const fullLead = await kommoClient.getLeadById(firstId);
+    return res.json({
+      success: true,
+      message: `Lead #${firstId} traído con GET /leads/:id (estructura completa para revisar custom_fields_values, _embedded.tags, etc.)`,
+      data: {
+        lead: fullLead ?? listLeads[0],
+        listLead: listLeads[0],
+        listCount: listLeads.length,
+      },
+    });
+  } catch (error: any) {
+    console.error('[KOMMO API] Error en /kommo/leads/sample:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Error al traer lead de muestra',
+    });
+  }
+});
+
 // Endpoint para sincronización inicial completa - trae TODOS los leads con TODOS sus campos
 router.post('/kommo/leads/full-sync', async (req: Request, res: Response) => {
   try {
@@ -562,11 +606,15 @@ router.post('/kommo/leads/full-sync', async (req: Request, res: Response) => {
       const kommoClient = createKommoClient(credentials);
       
       console.log(`[KOMMO FULL SYNC] Cliente de Kommo creado`);
-      console.log(`[KOMMO FULL SYNC] Obteniendo todos los leads con datos completos (custom_fields_values, fuente, UTM, contactos, empresas, etiquetas)...`);
-      console.log(`[KOMMO FULL SYNC] ⏳ Esto puede tardar varios minutos: se enriquece cada lead con GET /leads/:id para traer todos los campos personalizados.`);
-      
-      // Obtener todos los leads enriquecidos: listado + GET por id para cada uno (trae custom_fields_values completos: fuente, campaña Meta/Google, etc.)
-      const apiLeads = await kommoClient.getLeadsWithFullDetails();
+      const enrichDetails = getQueryParam(req.query.enrichDetails || req.body?.enrichDetails) === 'true';
+      if (enrichDetails) {
+        console.log(`[KOMMO FULL SYNC] enrichDetails=true: se enriquecerá cada lead con GET /leads/:id (puede dar timeout en serverless >5min)`);
+      } else {
+        console.log(`[KOMMO FULL SYNC] Obteniendo listado de leads (with=contacts,companies,tags). Para datos completos por lead use ?enrichDetails=true (riesgo de timeout).`);
+      }
+      const apiLeads = enrichDetails
+        ? await kommoClient.getLeadsWithFullDetails()
+        : await kommoClient.getLeadsWithFilters({});
       
       console.log(`[KOMMO FULL SYNC] ✅ Leads obtenidos desde API: ${apiLeads.length}`);
       console.log(`[KOMMO FULL SYNC] Iniciando guardado en MongoDB en lotes de 50...`);
