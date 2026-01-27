@@ -192,31 +192,73 @@ export async function syncKommoLeads(
       console.warn(`[KOMMO STORAGE] ⚠️  ${leads.length - validLeads.length} leads fueron descartados por no tener id válido`);
     }
 
-    // En full sync, no necesitamos cargar leads existentes porque procesaremos todos
-    // Esto ahorra tiempo y memoria para grandes volúmenes de datos
-    const existingLeadsMap = new Map<number, StoredKommoLead>();
-    // Solo cargar leads existentes si NO es full sync (para comparar modificaciones)
-    // if (!isFullSync) {
-    //   const existingLeads = await collection
-    //     .find({ customerId: cleanCustomerId })
-    //     .toArray() as StoredKommoLead[];
-    //   
-    //   existingLeads.forEach((lead: StoredKommoLead) => {
-    //     if (lead.id != null && typeof lead.id === 'number' && !isNaN(lead.id) && lead.id > 0) {
-    //       existingLeadsMap.set(lead.id, lead);
-    //     }
-    //   });
-    // }
+    // OPTIMIZACIÓN: Cargar solo los IDs de leads existentes para filtrar rápidamente
+    // Esto nos permite procesar primero los nuevos y saltar los existentes que no han cambiado
+    console.log(`[KOMMO STORAGE] Cargando IDs de leads existentes para optimización...`);
+    const existingLeadIds = new Set<number>();
+    const existingLeadsMap = new Map<number, { updated_at: number; syncedAt: Date }>();
+    
+    try {
+      const existingLeads = await collection
+        .find(
+          { 
+            customerId: cleanCustomerId,
+            id: { $exists: true, $ne: null, $type: 'number' } as any
+          },
+          { 
+            projection: { id: 1, updated_at: 1, syncedAt: 1 } // Solo cargar campos necesarios
+          }
+        )
+        .toArray() as any[];
+      
+      existingLeads.forEach((lead: any) => {
+        if (lead.id != null && typeof lead.id === 'number' && !isNaN(lead.id) && lead.id > 0) {
+          existingLeadIds.add(lead.id);
+          existingLeadsMap.set(lead.id, {
+            updated_at: lead.updated_at || 0,
+            syncedAt: lead.syncedAt || new Date(0)
+          });
+        }
+      });
+      
+      console.log(`[KOMMO STORAGE] ✅ ${existingLeadIds.size} leads existentes encontrados en BD`);
+    } catch (error: any) {
+      console.warn(`[KOMMO STORAGE] ⚠️  Error al cargar leads existentes, continuando sin optimización:`, error.message);
+    }
+
+    // Separar leads en nuevos y existentes para procesar primero los nuevos
+    const newLeadsList: KommoLead[] = [];
+    const existingLeadsList: KommoLead[] = [];
+    
+    for (const lead of validLeads) {
+      if (existingLeadIds.has(lead.id)) {
+        // Verificar si el lead ha cambiado comparando updated_at
+        const existing = existingLeadsMap.get(lead.id);
+        if (existing && lead.updated_at && lead.updated_at > existing.updated_at) {
+          existingLeadsList.push(lead); // Lead existente que ha cambiado
+        }
+        // Si no ha cambiado, lo saltamos completamente
+      } else {
+        newLeadsList.push(lead); // Lead nuevo
+      }
+    }
+    
+    console.log(`[KOMMO STORAGE] 📊 Leads separados: ${newLeadsList.length} nuevos, ${existingLeadsList.length} existentes modificados, ${validLeads.length - newLeadsList.length - existingLeadsList.length} sin cambios (se saltarán)`);
+    
+    // Procesar primero los nuevos (más importantes), luego los existentes modificados
+    const leadsToProcess = [...newLeadsList, ...existingLeadsList];
+    console.log(`[KOMMO STORAGE] 🚀 Procesando ${leadsToProcess.length} leads (${newLeadsList.length} nuevos primero, luego ${existingLeadsList.length} modificados)`);
 
     // Procesar leads en lotes pequeños para máxima confiabilidad
     // Lotes de 50 aseguran que cada operación sea rápida y confiable
     const batchSize = 50;
     const now = new Date();
     
-    console.log(`[KOMMO STORAGE] Iniciando procesamiento de ${validLeads.length} leads en lotes de ${batchSize} (${Math.ceil(validLeads.length / batchSize)} lotes totales)`);
+    console.log(`[KOMMO STORAGE] Iniciando procesamiento de ${leadsToProcess.length} leads en lotes de ${batchSize} (${Math.ceil(leadsToProcess.length / batchSize)} lotes totales)`);
+    console.log(`[KOMMO STORAGE] ⚡ Optimización: Se saltarán ${validLeads.length - leadsToProcess.length} leads que ya existen y no han cambiado`);
 
-    for (let i = 0; i < validLeads.length; i += batchSize) {
-      const batch = validLeads.slice(i, i + batchSize);
+    for (let i = 0; i < leadsToProcess.length; i += batchSize) {
+      const batch = leadsToProcess.slice(i, i + batchSize);
       const operations: any[] = [];
 
       for (const lead of batch) {
@@ -511,10 +553,12 @@ export async function syncKommoLeads(
       }
       
       // Log de progreso cada 10 lotes para no saturar los logs
-      if ((i / batchSize) % 10 === 0 || i + batchSize >= validLeads.length) {
-        const processed = Math.min(i + batchSize, validLeads.length);
-        const progress = Math.round((processed / validLeads.length) * 100);
-        console.log(`[KOMMO STORAGE] 📊 Progreso: ${processed}/${validLeads.length} leads procesados (${progress}%)`);
+      if ((i / batchSize) % 10 === 0 || i + batchSize >= leadsToProcess.length) {
+        const processed = Math.min(i + batchSize, leadsToProcess.length);
+        const progress = Math.round((processed / leadsToProcess.length) * 100);
+        const newProcessed = Math.min(processed, newLeadsList.length);
+        const existingProcessed = Math.max(0, processed - newLeadsList.length);
+        console.log(`[KOMMO STORAGE] 📊 Progreso: ${processed}/${leadsToProcess.length} leads procesados (${progress}%) - ${newProcessed} nuevos, ${existingProcessed} modificados`);
       }
     }
 
@@ -522,7 +566,7 @@ export async function syncKommoLeads(
     // IMPORTANTE: Solo hacer esto si TODOS los leads se procesaron exitosamente
     // Si el proceso se interrumpe (timeout, error), NO marcar como eliminados
     // porque podríamos estar marcando leads válidos que simplemente no se procesaron aún
-    if (isFullSync && errors === 0 && newLeads + updatedLeads >= validLeads.length * 0.95) {
+    if (isFullSync && errors === 0 && newLeads + updatedLeads >= leadsToProcess.length * 0.95) {
       // Solo marcar como eliminados si procesamos al menos el 95% de los leads sin errores
       // Esto previene marcar como eliminados leads válidos si el proceso se interrumpe
       const apiLeadIds = new Set(validLeads.map(l => l.id).filter(id => id != null));
@@ -560,21 +604,24 @@ export async function syncKommoLeads(
       id: { $exists: true, $ne: null, $type: 'number' } as any
     });
 
+    const skippedLeads = validLeads.length - leadsToProcess.length;
+    
     console.log(`[KOMMO STORAGE] ==========================================`);
     console.log(`[KOMMO STORAGE] Sincronización completada para customerId "${cleanCustomerId}":`);
     console.log(`[KOMMO STORAGE]   - Total recibidos: ${leads.length}`);
-    console.log(`[KOMMO STORAGE]   - Total válidos procesados: ${validLeads.length}`);
+    console.log(`[KOMMO STORAGE]   - Total válidos: ${validLeads.length}`);
+    console.log(`[KOMMO STORAGE]   - Leads procesados: ${leadsToProcess.length} (${newLeadsList.length} nuevos + ${existingLeadsList.length} modificados)`);
+    console.log(`[KOMMO STORAGE]   - Leads saltados (sin cambios): ${skippedLeads}`);
     console.log(`[KOMMO STORAGE]   - Nuevos leads: ${newLeads}`);
     console.log(`[KOMMO STORAGE]   - Leads actualizados: ${updatedLeads}`);
     console.log(`[KOMMO STORAGE]   - Leads eliminados: ${deletedLeads}`);
     console.log(`[KOMMO STORAGE]   - Errores: ${errors}`);
     console.log(`[KOMMO STORAGE]   - Duración: ${duration}s`);
     console.log(`[KOMMO STORAGE]   - Verificación en BD: ${verifyCount} total, ${verifyActiveCount} activos, ${verifyWithValidId} con id válido`);
-    console.log(`[KOMMO STORAGE]   - Resumen de procesamiento: ${newLeads} nuevos, ${updatedLeads} actualizados, ${validLeads.length - newLeads - updatedLeads} ya existían`);
     console.log(`[KOMMO STORAGE] ==========================================`);
 
     return {
-      totalProcessed: validLeads.length, // Usar validLeads en lugar de leads
+      totalProcessed: leadsToProcess.length, // Solo contar los que realmente se procesaron
       newLeads,
       updatedLeads,
       deletedLeads,
