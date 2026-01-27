@@ -694,6 +694,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
   const webhookLogId = new Date().toISOString() + '_' + Math.random().toString(36).substr(2, 9);
   const startTime = Date.now();
   let customerId: string | null = null;
+  let accountId: string | null | undefined = null;
   let success = false;
   let errorMessage: string | null = null;
   let processedLeads = 0;
@@ -719,10 +720,11 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
 
     // Extraer accountId del webhook
     // Kommo puede enviarlo en diferentes lugares según el tipo de webhook
-    const accountId = webhookData.account?.id || 
-                     webhookData.account_id || 
-                     webhookData.accountId ||
-                     req.headers['x-account-id'] as string;
+    accountId = webhookData.account?.id || 
+                webhookData.account_id || 
+                webhookData.accountId ||
+                (req.headers['x-account-id'] as string) ||
+                null;
 
     if (!accountId) {
       console.warn('[KOMMO WEBHOOK] No se encontró accountId en el webhook');
@@ -870,7 +872,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     await saveWebhookLog({
       logId: webhookLogId,
       customerId: customerId!,
-      accountId: accountId?.toString() || null,
+      accountId: accountId,
       success: true,
       processedLeads,
       deletedLeads,
@@ -908,14 +910,14 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
       await saveWebhookLog({
         logId: webhookLogId,
         customerId: customerId || 'unknown',
-        accountId: accountId?.toString() || null,
+        accountId: accountId || undefined,
         success: false,
         processedLeads: 0,
         deletedLeads: 0,
         duration,
         headers: req.headers,
         body: req.body,
-        error: errorMessage,
+        error: errorMessage || undefined,
         stack: error.stack,
         timestamp: new Date(),
       });
@@ -936,7 +938,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
 async function saveWebhookLog(logData: {
   logId: string;
   customerId: string;
-  accountId: string | null;
+  accountId: string | null | undefined;
   success: boolean;
   processedLeads: number;
   deletedLeads: number;
@@ -944,7 +946,7 @@ async function saveWebhookLog(logData: {
   headers: any;
   body: any;
   response?: any;
-  error?: string;
+  error?: string | null;
   stack?: string;
   timestamp: Date;
 }) {
