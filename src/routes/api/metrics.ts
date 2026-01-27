@@ -737,35 +737,106 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     const { ObjectId } = await import('mongodb');
     const customers = await db.collection('customers').find({}).toArray();
     
-    // Si tenemos accountId, buscar por él
+    // Si tenemos accountId, buscar por él (método principal y más seguro)
     if (accountId) {
+      console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Buscando cliente por accountId: ${accountId}`);
       for (const customer of customers) {
         if (customer.kommoCredentials) {
           const baseUrl = customer.kommoCredentials.baseUrl || '';
           // La URL de Kommo es típicamente: https://{accountId}.kommo.com
+          // También puede ser: https://{accountId}.kommo.com/ o con subdominios
           const urlMatch = baseUrl.match(/https?:\/\/([^.]+)\.kommo\.com/i);
-          if (urlMatch && urlMatch[1] === accountId.toString()) {
-            customerId = customer._id.toString();
-            break;
+          if (urlMatch) {
+            const urlAccountId = urlMatch[1];
+            // Comparar accountId (puede ser string o number)
+            if (urlAccountId === accountId.toString() || urlAccountId === String(accountId)) {
+              customerId = customer._id.toString();
+              console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente identificado: ${customerId} (${customer.nombre || customer.email || 'Sin nombre'}) por accountId: ${accountId}`);
+              break;
+            }
           }
         }
       }
+      
+      if (!customerId) {
+        console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ No se encontró cliente con accountId: ${accountId}`);
+      }
+    } else {
+      console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ No se recibió accountId en el webhook`);
     }
     
-    // Si no encontramos por accountId, intentar buscar por cualquier cliente con credenciales de Kommo
-    // y usar el primero que tenga (útil para desarrollo/testing)
+    // Si no encontramos por accountId, intentar identificar por otros métodos
+    // IMPORTANTE: Solo usar fallback si hay UN SOLO cliente con credenciales de Kommo
+    // Si hay múltiples, rechazar el webhook para evitar actualizar la cuenta incorrecta
     if (!customerId) {
-      for (const customer of customers) {
-        if (customer.kommoCredentials) {
-          customerId = customer._id.toString();
-          console.log(`[KOMMO WEBHOOK] Usando customerId encontrado: ${customerId} (sin accountId específico)`);
-          break;
+      const customersWithKommo = customers.filter(c => c.kommoCredentials);
+      
+      if (customersWithKommo.length === 0) {
+        console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ No hay clientes con credenciales de Kommo configuradas`);
+      } else if (customersWithKommo.length === 1) {
+        // Solo si hay UN cliente, usar fallback (útil para desarrollo/testing con una sola cuenta)
+        customerId = customersWithKommo[0]._id.toString();
+        console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ Usando fallback: cliente único encontrado: ${customerId} (${customersWithKommo[0].nombre || customersWithKommo[0].email || 'Sin nombre'})`);
+        console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ NOTA: Este webhook no tenía accountId. Se recomienda configurar webhooks con accountId para múltiples cuentas.`);
+      } else {
+        // Si hay múltiples clientes y no tenemos accountId, rechazar el webhook
+        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] ❌ ERROR: Hay ${customersWithKommo.length} clientes con credenciales de Kommo, pero el webhook no incluye accountId. No se puede determinar qué cuenta actualizar.`);
+        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Clientes encontrados:`, customersWithKommo.map(c => ({
+          id: c._id.toString(),
+          nombre: c.nombre || c.email || 'Sin nombre',
+          baseUrl: c.kommoCredentials?.baseUrl || 'Sin URL'
+        })));
+        
+        // Guardar log del error antes de responder
+        const duration = Date.now() - startTime;
+        try {
+          await saveWebhookLog({
+            logId: webhookLogId,
+            customerId: 'unknown',
+            accountId: null,
+            success: false,
+            processedLeads: 0,
+            deletedLeads: 0,
+            duration,
+            headers: req.headers,
+            body: webhookData,
+            error: `No se puede identificar la cuenta: hay ${customersWithKommo.length} clientes con Kommo pero el webhook no incluye accountId`,
+            timestamp: new Date(),
+          });
+        } catch (logError) {
+          console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Error al guardar log:`, logError);
         }
+        
+        // Responder 200 para que Kommo no reintente, pero loguear el error
+        return res.status(200).json({
+          success: false,
+          message: `No se puede identificar la cuenta: hay ${customersWithKommo.length} clientes con Kommo pero el webhook no incluye accountId. Verifica la configuración del webhook en Kommo.`,
+        });
       }
     }
 
     if (!customerId) {
-      console.warn(`[KOMMO WEBHOOK] No se encontró cliente con credenciales de Kommo`);
+      console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ No se encontró cliente con credenciales de Kommo`);
+      // Guardar log del error antes de responder
+      const duration = Date.now() - startTime;
+      try {
+        await saveWebhookLog({
+          logId: webhookLogId,
+          customerId: 'unknown',
+          accountId: accountId || null,
+          success: false,
+          processedLeads: 0,
+          deletedLeads: 0,
+          duration,
+          headers: req.headers,
+          body: webhookData,
+          error: 'Cliente no encontrado para este webhook',
+          timestamp: new Date(),
+        });
+      } catch (logError) {
+        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Error al guardar log:`, logError);
+      }
+      
       // Responder 200 para que Kommo no reintente, pero loguear el error
       return res.status(200).json({
         success: false,
