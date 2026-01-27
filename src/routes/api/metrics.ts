@@ -701,9 +701,27 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
   let deletedLeads = 0;
   
   try {
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ==========================================`);
     console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Recibida petición de webhook`);
-    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Headers:`, JSON.stringify(req.headers, null, 2));
-    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body:`, JSON.stringify(req.body, null, 2));
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Method: ${req.method}`);
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] URL: ${req.url}`);
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Headers keys:`, Object.keys(req.headers));
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Content-Type:`, req.headers['content-type']);
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body type:`, typeof req.body);
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body is array:`, Array.isArray(req.body));
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body keys:`, req.body && typeof req.body === 'object' ? Object.keys(req.body) : 'N/A');
+    
+    // Log del body completo (limitado para no saturar logs)
+    try {
+      const bodyStr = JSON.stringify(req.body, null, 2);
+      if (bodyStr.length > 10000) {
+        console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body (primeros 10000 chars):`, bodyStr.substring(0, 10000));
+      } else {
+        console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body completo:`, bodyStr);
+      }
+    } catch (e) {
+      console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body (no serializable):`, String(req.body).substring(0, 1000));
+    }
     
     // Kommo envía los datos en el body
     const webhookData = req.body;
@@ -711,7 +729,26 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     // Kommo puede enviar diferentes tipos de webhooks
     // Estructura típica: { account: { id: ... }, leads: { add: [...], update: [...], delete: [...] } }
     if (!webhookData) {
-      console.warn('[KOMMO WEBHOOK] Body vacío o inválido');
+      console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] Body vacío o inválido`);
+      // Guardar log del error antes de responder
+      const duration = Date.now() - startTime;
+      try {
+        await saveWebhookLog({
+          logId: webhookLogId,
+          customerId: 'unknown',
+          accountId: null,
+          success: false,
+          processedLeads: 0,
+          deletedLeads: 0,
+          duration,
+          headers: req.headers,
+          body: null,
+          error: 'Body vacío o inválido',
+          timestamp: new Date(),
+        });
+      } catch (logError) {
+        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Error al guardar log:`, logError);
+      }
       return res.status(400).json({
         success: false,
         error: 'Body vacío o inválido',
@@ -844,7 +881,12 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`[KOMMO WEBHOOK] Procesando webhook para customerId: ${customerId}`);
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Procesando webhook para customerId: ${customerId}`);
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Webhook data structure:`, JSON.stringify({
+      hasLeads: !!webhookData.leads,
+      leadsType: Array.isArray(webhookData.leads) ? 'array' : typeof webhookData.leads,
+      leadsKeys: webhookData.leads && typeof webhookData.leads === 'object' ? Object.keys(webhookData.leads) : [],
+    }));
 
     // Procesar los eventos del webhook
     // Kommo envía eventos en diferentes formatos según el tipo
@@ -856,21 +898,68 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     // También puede venir directamente como array
     const allLeadsEvents = Array.isArray(webhookData.leads) ? webhookData.leads : [];
     
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Eventos detectados:`, {
+      leadsToAdd: leadsToAdd.length,
+      leadsToUpdate: leadsToUpdate.length,
+      leadsToDelete: leadsToDelete.length,
+      allLeadsEvents: allLeadsEvents.length,
+    });
+    
     // Combinar todos los eventos de leads
     const allLeadIds = new Set<number>();
     
     [...leadsToAdd, ...leadsToUpdate, ...allLeadsEvents].forEach((lead: any) => {
-      const leadId = lead.id || lead.lead_id;
-      if (leadId) allLeadIds.add(leadId);
+      const leadId = lead.id || lead.lead_id || lead;
+      if (leadId && typeof leadId === 'number') {
+        allLeadIds.add(leadId);
+      } else if (leadId && typeof leadId === 'string') {
+        // Intentar convertir string a number
+        const parsedId = parseInt(leadId, 10);
+        if (!isNaN(parsedId)) {
+          allLeadIds.add(parsedId);
+        }
+      }
     });
     
-    // Procesar leads eliminados
-    leadsToDelete.forEach((leadId: number) => {
-      allLeadIds.add(leadId);
+    // Procesar leads eliminados (pueden venir como números o objetos)
+    leadsToDelete.forEach((leadIdOrObj: any) => {
+      const leadId = typeof leadIdOrObj === 'number' ? leadIdOrObj : (leadIdOrObj?.id || leadIdOrObj?.lead_id || leadIdOrObj);
+      if (leadId && typeof leadId === 'number') {
+        allLeadIds.add(leadId);
+      } else if (leadId && typeof leadId === 'string') {
+        const parsedId = parseInt(leadId, 10);
+        if (!isNaN(parsedId)) {
+          allLeadIds.add(parsedId);
+        }
+      }
     });
+    
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Total lead IDs únicos a procesar: ${allLeadIds.size}`, Array.from(allLeadIds));
 
     if (allLeadIds.size === 0) {
-      console.log('[KOMMO WEBHOOK] No hay eventos de leads para procesar');
+      console.log(`[KOMMO WEBHOOK] [${webhookLogId}] No hay eventos de leads para procesar`);
+      // Guardar log incluso cuando no hay eventos (para monitoreo)
+      const duration = Date.now() - startTime;
+      try {
+        await saveWebhookLog({
+          logId: webhookLogId,
+          customerId: customerId,
+          accountId: accountId,
+          success: true,
+          processedLeads: 0,
+          deletedLeads: 0,
+          duration,
+          headers: req.headers,
+          body: webhookData,
+          response: {
+            success: true,
+            message: 'Webhook recibido pero no hay eventos de leads para procesar',
+          },
+          timestamp: new Date(),
+        });
+      } catch (logError) {
+        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Error al guardar log:`, logError);
+      }
       return res.status(200).json({
         success: true,
         message: 'Webhook recibido pero no hay eventos de leads para procesar',
@@ -882,7 +971,26 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     // Obtener credenciales del cliente
     const credentials = await getKommoCredentialsForCustomer(customerId);
     if (!credentials) {
-      console.error(`[KOMMO WEBHOOK] No se encontraron credenciales para customerId: ${customerId}`);
+      console.error(`[KOMMO WEBHOOK] [${webhookLogId}] No se encontraron credenciales para customerId: ${customerId}`);
+      // Guardar log del error antes de responder
+      const duration = Date.now() - startTime;
+      try {
+        await saveWebhookLog({
+          logId: webhookLogId,
+          customerId: customerId,
+          accountId: accountId,
+          success: false,
+          processedLeads: 0,
+          deletedLeads: 0,
+          duration,
+          headers: req.headers,
+          body: webhookData,
+          error: 'Credenciales no encontradas',
+          timestamp: new Date(),
+        });
+      } catch (logError) {
+        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Error al guardar log:`, logError);
+      }
       return res.status(200).json({
         success: false,
         message: 'Credenciales no encontradas',
@@ -893,21 +1001,41 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     
     // Procesar cada lead
     let leadsToSync: any[] = [];
+    let leadsDeleted = 0;
+    let leadsError = 0;
+    
+    // Convertir leadsToDelete a Set para búsqueda rápida
+    const deletedLeadIdsSet = new Set<number>();
+    leadsToDelete.forEach((leadIdOrObj: any) => {
+      const leadId = typeof leadIdOrObj === 'number' ? leadIdOrObj : (leadIdOrObj?.id || leadIdOrObj?.lead_id || leadIdOrObj);
+      if (leadId && typeof leadId === 'number') {
+        deletedLeadIdsSet.add(leadId);
+      } else if (leadId && typeof leadId === 'string') {
+        const parsedId = parseInt(leadId, 10);
+        if (!isNaN(parsedId)) {
+          deletedLeadIdsSet.add(parsedId);
+        }
+      }
+    });
+    
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Procesando ${allLeadIds.size} leads (${deletedLeadIdsSet.size} para eliminar, ${allLeadIds.size - deletedLeadIdsSet.size} para actualizar/crear)`);
     
     for (const leadId of allLeadIds) {
       try {
         // Si es un lead eliminado, marcarlo como eliminado en BD
-        if (leadsToDelete.includes(leadId)) {
+        if (deletedLeadIdsSet.has(leadId)) {
           const db = await getMongoDb();
-          await db.collection('kommo_leads').updateOne(
+          const deleteResult = await db.collection('kommo_leads').updateOne(
             { customerId: customerId.trim(), id: leadId },
             { $set: { is_deleted: true, syncedAt: new Date(), lastModifiedAt: new Date() } }
           );
-          console.log(`[KOMMO WEBHOOK] Lead ${leadId} marcado como eliminado`);
+          console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Lead ${leadId} marcado como eliminado (matched: ${deleteResult.matchedCount}, modified: ${deleteResult.modifiedCount})`);
+          leadsDeleted++;
           continue;
         }
 
         // Obtener el lead completo desde la API de Kommo
+        console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Obteniendo lead ${leadId} desde API de Kommo...`);
         const leadResponse: any = await kommoClient.authenticatedRequest(
           `/leads/${leadId}?with=contacts,companies`
         );
@@ -915,28 +1043,77 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
         if (leadResponse && leadResponse._embedded && leadResponse._embedded.leads) {
           const lead = leadResponse._embedded.leads[0];
           if (lead) {
+            console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Lead ${leadId} obtenido: "${lead.name || 'Sin nombre'}"`);
             leadsToSync.push(lead);
+          } else {
+            console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️  Lead ${leadId} obtenido pero array vacío`);
+            leadsError++;
           }
         } else if (leadResponse && leadResponse.id) {
           // A veces Kommo devuelve el lead directamente
+          console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Lead ${leadId} obtenido directamente: "${leadResponse.name || 'Sin nombre'}"`);
           leadsToSync.push(leadResponse);
+        } else {
+          console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️  Lead ${leadId} no se pudo obtener correctamente. Respuesta:`, {
+            hasResponse: !!leadResponse,
+            hasEmbedded: !!(leadResponse?._embedded),
+            hasLeads: !!(leadResponse?._embedded?.leads),
+            leadsLength: leadResponse?._embedded?.leads?.length || 0,
+            hasId: !!leadResponse?.id,
+          });
+          leadsError++;
         }
       } catch (error: any) {
-        console.error(`[KOMMO WEBHOOK] Error al obtener lead ${leadId}:`, error.message);
+        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] ❌ Error al obtener lead ${leadId}:`, {
+          message: error.message,
+          status: error.status || error.statusCode,
+          response: error.response?.data || error.response,
+        });
+        leadsError++;
         // Continuar con el siguiente lead
       }
     }
+    
+    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Resumen de procesamiento:`, {
+      totalLeads: allLeadIds.size,
+      leadsObtenidos: leadsToSync.length,
+      leadsEliminados: leadsDeleted,
+      leadsError: leadsError,
+    });
 
     // Si hay leads para actualizar, sincronizarlos
     if (leadsToSync.length > 0) {
-      console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Sincronizando ${leadsToSync.length} leads actualizados`);
-      await syncKommoLeads(customerId, leadsToSync, false);
-      console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ ${leadsToSync.length} leads sincronizados exitosamente`);
-      processedLeads = leadsToSync.length;
+      console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Sincronizando ${leadsToSync.length} leads a MongoDB...`);
+      try {
+        const syncResult = await syncKommoLeads(customerId, leadsToSync, false);
+        console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Sincronización completada:`, {
+          totalProcessed: syncResult.totalProcessed,
+          newLeads: syncResult.newLeads,
+          updatedLeads: syncResult.updatedLeads,
+          deletedLeads: syncResult.deletedLeads,
+          errors: syncResult.errors,
+          duration: syncResult.duration,
+        });
+        processedLeads = syncResult.totalProcessed || leadsToSync.length;
+      } catch (syncError: any) {
+        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] ❌ Error al sincronizar leads:`, {
+          message: syncError.message,
+          stack: syncError.stack,
+        });
+        // Continuar para guardar el log del error
+        processedLeads = 0;
+        errorMessage = `Error al sincronizar leads: ${syncError.message}`;
+        success = false;
+      }
+    } else {
+      console.log(`[KOMMO WEBHOOK] [${webhookLogId}] No hay leads para sincronizar (todos fueron eliminados o hubo errores)`);
+      processedLeads = 0;
     }
     
-    deletedLeads = leadsToDelete.length;
-    success = true;
+    deletedLeads = leadsDeleted;
+    if (success === undefined || success === null) {
+      success = true; // Solo establecer a true si no hubo error en sync
+    }
 
     // Guardar log del webhook
     const duration = Date.now() - startTime;
@@ -1026,34 +1203,72 @@ async function saveWebhookLog(logData: {
     const logsCollection = db.collection('kommo_webhook_logs');
     
     // Limitar el tamaño del body y headers para no exceder límites de MongoDB
-    const limitedBody = JSON.stringify(logData.body).substring(0, 50000); // Máximo 50KB
-    const limitedHeaders = JSON.stringify(logData.headers).substring(0, 10000); // Máximo 10KB
+    let limitedBody: string;
+    let limitedHeaders: string;
     
-    await logsCollection.insertOne({
-      ...logData,
-      body: limitedBody,
-      headers: limitedHeaders,
-      createdAt: logData.timestamp,
-    });
-    
-    // Limpiar logs antiguos (mantener solo los últimos 1000)
-    const totalLogs = await logsCollection.countDocuments();
-    if (totalLogs > 1000) {
-      const logsToDelete = totalLogs - 1000;
-      const oldestLogs = await logsCollection
-        .find({})
-        .sort({ createdAt: 1 })
-        .limit(logsToDelete)
-        .toArray();
-      
-      if (oldestLogs.length > 0) {
-        const idsToDelete = oldestLogs.map(log => log._id);
-        await logsCollection.deleteMany({ _id: { $in: idsToDelete } });
-        console.log(`[KOMMO WEBHOOK] Limpiados ${logsToDelete} logs antiguos`);
-      }
+    try {
+      limitedBody = logData.body ? JSON.stringify(logData.body).substring(0, 50000) : '{}'; // Máximo 50KB
+    } catch (e) {
+      limitedBody = String(logData.body || '{}').substring(0, 50000);
     }
+    
+    try {
+      limitedHeaders = logData.headers ? JSON.stringify(logData.headers).substring(0, 10000) : '{}'; // Máximo 10KB
+    } catch (e) {
+      limitedHeaders = String(logData.headers || '{}').substring(0, 10000);
+    }
+    
+    const logDocument = {
+      logId: logData.logId,
+      customerId: logData.customerId,
+      accountId: logData.accountId || null,
+      success: logData.success,
+      processedLeads: logData.processedLeads,
+      deletedLeads: logData.deletedLeads,
+      duration: logData.duration,
+      headers: limitedHeaders,
+      body: limitedBody,
+      response: logData.response || null,
+      error: logData.error || null,
+      stack: logData.stack || null,
+      timestamp: logData.timestamp,
+      createdAt: logData.timestamp,
+    };
+    
+    const result = await logsCollection.insertOne(logDocument);
+    console.log(`[KOMMO WEBHOOK] [${logData.logId}] ✅ Log guardado en BD: ${result.insertedId}, customerId: ${logData.customerId}, success: ${logData.success}, processed: ${logData.processedLeads}, deleted: ${logData.deletedLeads}`);
+    
+    // Limpiar logs antiguos (mantener solo los últimos 1000) - hacerlo de forma asíncrona para no bloquear
+    setImmediate(async () => {
+      try {
+        const totalLogs = await logsCollection.countDocuments();
+        if (totalLogs > 1000) {
+          const logsToDelete = totalLogs - 1000;
+          const oldestLogs = await logsCollection
+            .find({})
+            .sort({ createdAt: 1 })
+            .limit(logsToDelete)
+            .toArray();
+          
+          if (oldestLogs.length > 0) {
+            const idsToDelete = oldestLogs.map(log => log._id);
+            await logsCollection.deleteMany({ _id: { $in: idsToDelete } });
+            console.log(`[KOMMO WEBHOOK] Limpiados ${logsToDelete} logs antiguos (total antes: ${totalLogs})`);
+          }
+        }
+      } catch (cleanupError) {
+        console.error('[KOMMO WEBHOOK] Error al limpiar logs antiguos:', cleanupError);
+      }
+    });
   } catch (error: any) {
-    console.error('[KOMMO WEBHOOK] Error al guardar log:', error);
+    console.error(`[KOMMO WEBHOOK] [${logData.logId}] ❌ Error al guardar log en BD:`, error);
+    console.error(`[KOMMO WEBHOOK] [${logData.logId}] Error details:`, {
+      message: error.message,
+      stack: error.stack,
+      customerId: logData.customerId,
+      accountId: logData.accountId,
+    });
+    // No lanzar el error para no interrumpir el flujo del webhook
   }
 }
 
