@@ -400,8 +400,8 @@ class KommoApiClient {
     // Construir query parameters base
     const baseParams: string[] = []
     baseParams.push('limit=250')
-    // Incluir datos relacionados (contactos, empresas, etiquetas, etc.)
-    baseParams.push('with=contacts,companies')
+    // Incluir todos los datos relacionados: contactos, empresas, etiquetas (custom_fields_values vienen en el lead por defecto)
+    baseParams.push('with=contacts,companies,tags')
 
     // Agregar filtros de fecha
     // Kommo usa formato timestamp Unix en segundos
@@ -499,6 +499,60 @@ class KommoApiClient {
 
     console.log(`[KOMMO LEADS] Finalizado: ${allLeads.length} leads obtenidos en ${totalPagesProcessed} páginas ${filterDescription}`)
     return allLeads
+  }
+
+  /**
+   * Obtiene un lead por ID con todos sus campos (custom_fields_values completos, contactos, empresas).
+   * Usado en sincronización completa para asegurar que traemos toda la data (fuente, UTM, etc.).
+   */
+  async getLeadById(id: number): Promise<KommoLead | null> {
+    try {
+      const response = await this.authenticatedRequest<{ _embedded?: { leads?: KommoLead[] } } & KommoLead>(
+        `/leads/${id}?with=contacts,companies,tags`
+      );
+      if (response._embedded?.leads?.[0]) {
+        return response._embedded.leads[0];
+      }
+      if (response.id) {
+        return response as KommoLead;
+      }
+      return null;
+    } catch (error: any) {
+      console.warn(`[KOMMO LEADS] Error al obtener lead ${id} completo:`, error?.message || error);
+      return null;
+    }
+  }
+
+  /**
+   * Obtiene todos los leads y luego enriquece cada uno con GET /leads/:id para traer
+   * todos los campos personalizados (custom_fields_values completos: fuente, UTM, etc.).
+   * Usar en sincronización completa para tener toda la data necesaria para métricas.
+   */
+  async getLeadsWithFullDetails(): Promise<KommoLead[]> {
+    const listLeads = await this.getLeadsWithFilters({});
+    if (listLeads.length === 0) return [];
+
+    const BATCH_SIZE = 3;
+    const DELAY_MS = 450;
+    const enriched: KommoLead[] = [];
+
+    console.log(`[KOMMO LEADS] Enriqueciendo ${listLeads.length} leads con datos completos (custom_fields_values, etc.)...`);
+
+    for (let i = 0; i < listLeads.length; i += BATCH_SIZE) {
+      const batch = listLeads.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        batch.map((lead) => this.getLeadById(lead.id))
+      );
+      for (let j = 0; j < results.length; j++) {
+        enriched.push(results[j] ?? batch[j]);
+      }
+      if (i + BATCH_SIZE < listLeads.length) {
+        await new Promise((r) => setTimeout(r, DELAY_MS));
+      }
+    }
+
+    console.log(`[KOMMO LEADS] ✅ ${enriched.length} leads con datos completos listos para guardar`);
+    return enriched;
   }
 
   /**

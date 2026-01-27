@@ -562,12 +562,11 @@ router.post('/kommo/leads/full-sync', async (req: Request, res: Response) => {
       const kommoClient = createKommoClient(credentials);
       
       console.log(`[KOMMO FULL SYNC] Cliente de Kommo creado`);
-      console.log(`[KOMMO FULL SYNC] Obteniendo todos los leads con todos sus campos (etiquetas, contactos, empresas, etc.)...`);
-      console.log(`[KOMMO FULL SYNC] ⏳ Esto puede tardar varios minutos para grandes volúmenes de datos...`);
+      console.log(`[KOMMO FULL SYNC] Obteniendo todos los leads con datos completos (custom_fields_values, fuente, UTM, contactos, empresas, etiquetas)...`);
+      console.log(`[KOMMO FULL SYNC] ⏳ Esto puede tardar varios minutos: se enriquece cada lead con GET /leads/:id para traer todos los campos personalizados.`);
       
-      // Obtener todos los leads con todos los campos relacionados
-      // El método getLeadsWithFilters ya incluye with=contacts,companies
-      const apiLeads = await kommoClient.getLeadsWithFilters({});
+      // Obtener todos los leads enriquecidos: listado + GET por id para cada uno (trae custom_fields_values completos: fuente, campaña Meta/Google, etc.)
+      const apiLeads = await kommoClient.getLeadsWithFullDetails();
       
       console.log(`[KOMMO FULL SYNC] ✅ Leads obtenidos desde API: ${apiLeads.length}`);
       console.log(`[KOMMO FULL SYNC] Iniciando guardado en MongoDB en lotes de 50...`);
@@ -680,8 +679,11 @@ router.post('/kommo/leads/sync', async (req: Request, res: Response) => {
     
     const kommoClient = createKommoClient(credentials);
     
-    // Iniciar la obtención de leads (esto puede tardar, pero al menos se inicia el proceso)
-    const leadsPromise = kommoClient.getLeadsWithFilters({});
+    // Con forceFullSync: traer cada lead completo (GET /leads/:id) para tener todos los custom_fields_values (fuente, UTM, etc.)
+    // Sin forceFullSync: solo listado (más rápido, menos datos por lead)
+    const leadsPromise = forceFullSync
+      ? kommoClient.getLeadsWithFullDetails()
+      : kommoClient.getLeadsWithFilters({});
     
     // Responder inmediatamente después de iniciar el proceso
     res.json({
