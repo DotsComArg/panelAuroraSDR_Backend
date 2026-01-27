@@ -227,27 +227,44 @@ export async function syncKommoLeads(
     }
 
     // Separar leads en nuevos y existentes para procesar primero los nuevos
+    // IMPORTANTE: En full sync, procesamos TODOS los leads para asegurar que tengan todos los campos
+    // En sync incremental, solo procesamos los nuevos o modificados
     const newLeadsList: KommoLead[] = [];
     const existingLeadsList: KommoLead[] = [];
     
-    for (const lead of validLeads) {
-      if (existingLeadIds.has(lead.id)) {
-        // Verificar si el lead ha cambiado comparando updated_at
-        const existing = existingLeadsMap.get(lead.id);
-        if (existing && lead.updated_at && lead.updated_at > existing.updated_at) {
-          existingLeadsList.push(lead); // Lead existente que ha cambiado
+    if (isFullSync) {
+      // En full sync, procesar TODOS los leads para asegurar que tengan todos los campos completos
+      // Esto es importante porque los leads pueden haber sido guardados antes con campos faltantes
+      console.log(`[KOMMO STORAGE] 🔄 Full sync: Procesando TODOS los leads para asegurar campos completos`);
+      for (const lead of validLeads) {
+        if (existingLeadIds.has(lead.id)) {
+          existingLeadsList.push(lead); // Procesar existentes para asegurar campos completos
+        } else {
+          newLeadsList.push(lead); // Lead nuevo
         }
-        // Si no ha cambiado, lo saltamos completamente
-      } else {
-        newLeadsList.push(lead); // Lead nuevo
+      }
+    } else {
+      // En sync incremental, solo procesar nuevos o modificados
+      for (const lead of validLeads) {
+        if (existingLeadIds.has(lead.id)) {
+          // Verificar si el lead ha cambiado comparando updated_at
+          const existing = existingLeadsMap.get(lead.id);
+          if (existing && lead.updated_at && lead.updated_at > existing.updated_at) {
+            existingLeadsList.push(lead); // Lead existente que ha cambiado
+          }
+          // Si no ha cambiado, lo saltamos completamente
+        } else {
+          newLeadsList.push(lead); // Lead nuevo
+        }
       }
     }
     
-    console.log(`[KOMMO STORAGE] 📊 Leads separados: ${newLeadsList.length} nuevos, ${existingLeadsList.length} existentes modificados, ${validLeads.length - newLeadsList.length - existingLeadsList.length} sin cambios (se saltarán)`);
+    const skippedCount = isFullSync ? 0 : (validLeads.length - newLeadsList.length - existingLeadsList.length);
+    console.log(`[KOMMO STORAGE] 📊 Leads separados: ${newLeadsList.length} nuevos, ${existingLeadsList.length} existentes ${isFullSync ? '(todos para asegurar campos completos)' : 'modificados'}, ${skippedCount} sin cambios (se saltarán)`);
     
-    // Procesar primero los nuevos (más importantes), luego los existentes modificados
+    // Procesar primero los nuevos (más importantes), luego los existentes
     const leadsToProcess = [...newLeadsList, ...existingLeadsList];
-    console.log(`[KOMMO STORAGE] 🚀 Procesando ${leadsToProcess.length} leads (${newLeadsList.length} nuevos primero, luego ${existingLeadsList.length} modificados)`);
+    console.log(`[KOMMO STORAGE] 🚀 Procesando ${leadsToProcess.length} leads (${newLeadsList.length} nuevos primero, luego ${existingLeadsList.length} existentes)`);
 
     // Procesar leads en lotes pequeños para máxima confiabilidad
     // Lotes de 50 aseguran que cada operación sea rápida y confiable
