@@ -9,6 +9,7 @@ import customersUsersRoutes from './routes/api/customers-users.js';
 import metricsRoutes from './routes/api/metrics.js';
 import adminRoutes from './routes/api/admin.js';
 import companySettingsRoutes from './routes/api/company-settings.js';
+import tokensRoutes from './routes/api/tokens.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -104,6 +105,7 @@ app.use('/api/users', usersRoutes);
 app.use('/api/metrics', metricsRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/company-settings', companySettingsRoutes);
+app.use('/api/tokens', tokensRoutes);
 // Rutas anidadas de customers deben ir antes de la ruta general
 app.use('/api/customers/:customerId/credentials', customersCredentialsRoutes);
 app.use('/api/customers/:customerId/users', customersUsersRoutes);
