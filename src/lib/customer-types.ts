@@ -8,9 +8,10 @@ export type ViewFeature =
   | 'analiticas' 
   | 'kommo'
   | 'equipo' 
-  | 'configuracion'
+  | 'configuracion' 
   | 'consultas' // Vista específica para HubsAutos (consultas de vehículos)
-  | 'tokens'; // Vista de gestión de tokens de OpenAI
+  | 'tokens' // Vista de gestión de tokens de OpenAI
+  | 'metaCapi'; // Meta Conversions API + Kommo (admin)
 
 export interface Customer {
   _id?: ObjectId;
@@ -47,6 +48,12 @@ export interface Customer {
     organizationId?: string; // ID de la organización (opcional)
     projectId?: string; // ID del proyecto (opcional)
   };
+  // Credenciales de Meta Conversions API (CAPI) encriptadas – para sincronización con Kommo
+  metaCapiCredentials?: {
+    pixelId: string; // Meta Pixel ID
+    accessToken: string; // Access token de CAPI (encriptado)
+    adAccountId?: string; // ID de cuenta de anuncios (opcional)
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -79,6 +86,11 @@ export interface CreateCustomerDto {
     apiKey: string; // API key sin encriptar (se encriptará al guardar)
     organizationId?: string;
     projectId?: string;
+  };
+  metaCapiCredentials?: {
+    pixelId: string;
+    accessToken: string; // Sin encriptar (se encriptará al guardar)
+    adAccountId?: string;
   };
 }
 

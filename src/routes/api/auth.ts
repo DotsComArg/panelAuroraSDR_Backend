@@ -357,6 +357,85 @@ router.post('/reset-password', async (req: Request, res: Response) => {
   }
 });
 
+// Cambiar contraseña (usuario logueado: actual + nueva)
+router.post('/change-password', async (req: Request, res: Response) => {
+  try {
+    const userId = req.headers['x-user-id'] as string;
+    const { currentPassword, newPassword } = req.body || {};
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'No autorizado',
+      });
+    }
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        error: 'Contraseña actual y nueva son requeridas',
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        error: 'La nueva contraseña debe tener al menos 8 caracteres',
+      });
+    }
+
+    if (!ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de usuario inválido',
+      });
+    }
+
+    const db = await getMongoDb();
+    const user = await db.collection<User>('users').findOne({
+      _id: new ObjectId(userId) as any,
+    });
+
+    if (!user || !user.passwordHash) {
+      return res.status(404).json({
+        success: false,
+        error: 'Usuario no encontrado',
+      });
+    }
+
+    const isValid = verifyPassword(currentPassword, user.passwordHash);
+    if (!isValid) {
+      return res.status(401).json({
+        success: false,
+        error: 'Contraseña actual incorrecta',
+      });
+    }
+
+    const newPasswordHash = hashPassword(newPassword);
+    await db.collection<User>('users').updateOne(
+      { _id: user._id },
+      { $set: { passwordHash: newPasswordHash, updatedAt: new Date() } },
+    );
+
+    try {
+      await sendPasswordChangedNotification(user.email);
+    } catch (e) {
+      console.warn('[change-password] No se pudo enviar email de notificación:', e);
+    }
+
+    return res.json({
+      success: true,
+      message: 'Contraseña actualizada exitosamente',
+    });
+  } catch (error) {
+    console.error('Error en change-password:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al cambiar la contraseña',
+    });
+  }
+});
+
 // Habilitar/deshabilitar 2FA
 router.post('/toggle-2fa', async (req: Request, res: Response) => {
   try {

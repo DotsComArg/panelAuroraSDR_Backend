@@ -67,6 +67,14 @@ router.get('/masked', async (req: Request, res: Response) => {
       };
     }
 
+    if (customer.metaCapiCredentials) {
+      maskedCredentials.metaCapi = {
+        pixelId: customer.metaCapiCredentials.pixelId,
+        hasAccessToken: !!customer.metaCapiCredentials.accessToken,
+        adAccountId: customer.metaCapiCredentials.adAccountId,
+      };
+    }
+
     return res.json({
       success: true,
       data: maskedCredentials,
@@ -135,6 +143,14 @@ router.post('/', async (req: Request, res: Response) => {
       };
     }
 
+    if (customer.metaCapiCredentials) {
+      credentials.metaCapi = {
+        pixelId: customer.metaCapiCredentials.pixelId,
+        accessToken: customer.metaCapiCredentials.accessToken ? decrypt(customer.metaCapiCredentials.accessToken) : undefined,
+        adAccountId: customer.metaCapiCredentials.adAccountId,
+      };
+    }
+
     return res.json({
       success: true,
       data: credentials,
@@ -199,6 +215,14 @@ router.get('/', async (req: Request, res: Response) => {
       };
     }
 
+    if (customer.metaCapiCredentials) {
+      credentials.metaCapi = {
+        pixelId: customer.metaCapiCredentials.pixelId,
+        accessToken: customer.metaCapiCredentials.accessToken ? decrypt(customer.metaCapiCredentials.accessToken) : undefined,
+        adAccountId: customer.metaCapiCredentials.adAccountId,
+      };
+    }
+
     return res.json({
       success: true,
       data: credentials,
@@ -220,6 +244,7 @@ router.put('/', async (req: Request, res: Response) => {
       kommo?: any;
       postgres?: any;
       openAI?: any;
+      metaCapi?: any;
     };
     
     if (!customerIdParam || !ObjectId.isValid(customerIdParam)) {
@@ -278,6 +303,16 @@ router.put('/', async (req: Request, res: Response) => {
         ...(existingOpenAI?.organizationId && !body.openAI.organizationId && { organizationId: existingOpenAI.organizationId }),
         ...(existingOpenAI?.projectId && !body.openAI.projectId && { projectId: existingOpenAI.projectId }),
       };
+    }
+
+    if (body.metaCapi) {
+      if (body.metaCapi.pixelId && body.metaCapi.accessToken) {
+        updateData.metaCapiCredentials = {
+          pixelId: body.metaCapi.pixelId,
+          accessToken: encrypt(body.metaCapi.accessToken),
+          ...(body.metaCapi.adAccountId && { adAccountId: body.metaCapi.adAccountId }),
+        };
+      }
     }
 
     const result = await db.collection<Customer>('customers').findOneAndUpdate(

@@ -26,6 +26,7 @@ const VALID_VIEWS: ViewFeature[] = [
   'configuracion',
   'consultas',
   'tokens',
+  'metaCapi',
 ];
 
 // Función para obtener vistas por defecto según el plan
@@ -704,6 +705,14 @@ router.post('/', async (req: Request, res: Response) => {
       };
     }
 
+    if (body.metaCapiCredentials?.pixelId && body.metaCapiCredentials?.accessToken) {
+      customerData.metaCapiCredentials = {
+        pixelId: body.metaCapiCredentials.pixelId.trim(),
+        accessToken: encrypt(body.metaCapiCredentials.accessToken),
+        ...(body.metaCapiCredentials.adAccountId && { adAccountId: body.metaCapiCredentials.adAccountId.trim() }),
+      };
+    }
+
     const result = await db.collection<Customer>('customers').insertOne(customerData);
 
     return res.status(201).json({
@@ -788,6 +797,14 @@ router.put('/:customerId', async (req: Request, res: Response) => {
         ...(body.openAICredentials.projectId && { projectId: body.openAICredentials.projectId }),
         ...(existingOpenAI?.organizationId && !body.openAICredentials.organizationId && { organizationId: existingOpenAI.organizationId }),
         ...(existingOpenAI?.projectId && !body.openAICredentials.projectId && { projectId: existingOpenAI.projectId }),
+      };
+    }
+
+    if (body.metaCapiCredentials?.pixelId && body.metaCapiCredentials?.accessToken) {
+      updateData.metaCapiCredentials = {
+        pixelId: body.metaCapiCredentials.pixelId.trim(),
+        accessToken: encrypt(body.metaCapiCredentials.accessToken),
+        ...(body.metaCapiCredentials.adAccountId && { adAccountId: body.metaCapiCredentials.adAccountId.trim() }),
       };
     }
 
