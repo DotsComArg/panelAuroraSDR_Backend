@@ -54,22 +54,17 @@ export default function handler(req: any, res: any) {
   try {
     const origin = getOrigin(req);
 
-    if (req.method === 'OPTIONS') {
-      if (origin && isOriginAllowed(origin)) {
-        setCorsHeaders(res, origin);
-        res.status(204).end();
-        return;
-      }
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With, x-user-id, x-customer-id, x-user-email');
-      res.setHeader('Access-Control-Max-Age', '86400');
-      res.status(204).end();
+    if ((req.method || '').toUpperCase() === 'OPTIONS') {
+      const allowOrigin = origin && isOriginAllowed(origin) ? origin : 'https://panel.aurorasdr.ai';
+      setCorsHeaders(res, allowOrigin);
+      res.status(200).end();
       return;
     }
 
     return app(req, res);
   } catch (e) {
     console.error('[api/index] Handler error:', e);
+    res.setHeader('Access-Control-Allow-Origin', 'https://panel.aurorasdr.ai');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With, x-user-id, x-customer-id, x-user-email');
     res.setHeader('Access-Control-Max-Age', '86400');
