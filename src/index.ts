@@ -18,6 +18,8 @@ const PORT = process.env.PORT || 3001;
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
   'https://panel.aurorasdr.ai',
   'https://www.panel.aurorasdr.ai',
   process.env.FRONTEND_URL,
@@ -30,9 +32,7 @@ app.options('*', (req, res) => {
   // Verificar si el origen está permitido
   const isAllowed = !origin || 
     allowedOrigins.includes(origin) ||
-    (origin && origin.includes('vercel.app')) ||
-    (origin && origin.includes('localhost')) ||
-    (origin && origin.includes('aurorasdr.ai'));
+    (origin && (origin.includes('vercel.app') || origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes('aurorasdr.ai')));
   
   if (isAllowed && origin) {
     res.header('Access-Control-Allow-Origin', origin);
@@ -57,6 +57,7 @@ app.use(cors({
       allowedOrigins.includes(origin) ||
       origin.includes('vercel.app') ||
       origin.includes('localhost') ||
+      origin.includes('127.0.0.1') ||
       origin.includes('aurorasdr.ai');
     
     if (isAllowed) {
