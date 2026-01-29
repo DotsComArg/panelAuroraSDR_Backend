@@ -2,7 +2,7 @@
  * Helpers para obtener customerId de las requests y usar PostgreSQL por cliente
  */
 
-import { queryPostgres, queryPostgresForCustomer } from './postgresql';
+import { queryPostgres, queryPostgresForCustomer } from './postgresql.js';
 
 /**
  * Obtiene el customerId de una request (desde cookies, headers o query params)

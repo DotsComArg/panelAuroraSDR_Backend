@@ -1,5 +1,5 @@
 import { Pool, PoolClient } from 'pg';
-import { decrypt } from './encryption-utils';
+import { decrypt } from './encryption-utils.js';
 
 // Pool global por customerId para reutilizar conexiones
 const pools: Map<string, Pool> = new Map();
@@ -18,7 +18,7 @@ export async function getPostgresPoolForCustomer(customerId: string): Promise<Po
     }
 
     // Obtener credenciales del cliente
-    const { getMongoDb } = await import('./mongodb');
+    const { getMongoDb } = await import('./mongodb.js');
     const { ObjectId } = await import('mongodb');
     const db = await getMongoDb();
     

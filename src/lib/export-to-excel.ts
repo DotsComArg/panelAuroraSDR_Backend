@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { FormEntry } from './api-hubsautos';
+import { FormEntry } from './api-hubsautos.js';
 
 /**
  * Formatea una fecha a formato legible

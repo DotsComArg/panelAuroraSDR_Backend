@@ -1,4 +1,4 @@
-import { decrypt } from './encryption-utils'
+import { decrypt } from './encryption-utils.js'
 
 interface OpenAICredentials {
   apiKey: string // API key desencriptada
@@ -33,7 +33,7 @@ interface OpenAITokenUsage {
  */
 export async function getOpenAICredentialsForCustomer(customerId: string): Promise<OpenAICredentials | null> {
   try {
-    const { getMongoDb } = await import('./mongodb')
+    const { getMongoDb } = await import('./mongodb.js')
     const { ObjectId } = await import('mongodb')
     const db = await getMongoDb()
     
@@ -538,7 +538,7 @@ export async function getOpenAIUsageFromDB(
   endDate: Date
 ): Promise<OpenAITokenUsage[]> {
   try {
-    const { getMongoDb } = await import('./mongodb')
+    const { getMongoDb } = await import('./mongodb.js')
     const { ObjectId } = await import('mongodb')
     const db = await getMongoDb()
 
