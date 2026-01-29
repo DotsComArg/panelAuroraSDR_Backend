@@ -1,6 +1,14 @@
 // Este archivo es el entry point para Vercel serverless functions
-// Importa el app de Express compilado
-import app from '../src/index.js';
+// App de Express: dynamic import para no crashear al cargar (p. ej. si falta dist en el bundle de Vercel)
+
+let cachedApp: any = null;
+
+async function loadApp() {
+  if (cachedApp) return cachedApp;
+  const mod = await import('../src/index.js');
+  cachedApp = mod.default;
+  return cachedApp;
+}
 
 const ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -47,10 +55,7 @@ function getOrigin(req: any): string | null {
   return t || null;
 }
 
-// Handler específico para Vercel que maneja OPTIONS antes de pasar a Express.
-// El preflight OPTIONS debe devolver Access-Control-Allow-Origin con el origen exacto (scheme+host+port, sin path).
-// Si tenés Deployment Protection: Vercel Dashboard → Project → Settings → Deployment Protection → OPTIONS Allowlist → añadí /api.
-export default function handler(req: any, res: any) {
+export default async function handler(req: any, res: any) {
   try {
     const origin = getOrigin(req);
 
@@ -61,6 +66,7 @@ export default function handler(req: any, res: any) {
       return;
     }
 
+    const app = await loadApp();
     return app(req, res);
   } catch (e) {
     console.error('[api/index] Handler error:', e);
