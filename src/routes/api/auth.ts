@@ -220,7 +220,7 @@ router.post('/login', async (req: Request, res: Response) => {
         name: user.name,
         role: user.role,
         customerId: customerId,
-        redirectUrl: user.role === 'SuperAdmin' ? '/admin' : '/',
+        redirectUrl: user.role === 'SuperAdmin' ? '/admin' : '/home',
       },
     });
   } catch (error) {
