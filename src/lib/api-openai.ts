@@ -207,10 +207,13 @@ export async function getOpenAIUsage(
             if (results.length > 0) {
               bucketsWithData++
               // Si hay resultados, procesarlos individualmente
+              // La API puede devolver input_tokens/output_tokens/num_model_requests (nuevo) o n_context_tokens_total/n_generated_tokens_total/n_requests (legacy)
               for (const result of results) {
-                const tokens = (result.n_context_tokens_total || 0) + (result.n_generated_tokens_total || 0)
-                const requests = result.n_requests || 1
-                const model = result.snapshot_id || result.model || 'unknown'
+                const tokens = (result.input_tokens != null || result.output_tokens != null)
+                  ? (result.input_tokens || 0) + (result.output_tokens || 0)
+                  : (result.n_context_tokens_total || 0) + (result.n_generated_tokens_total || 0)
+                const requests = result.num_model_requests ?? result.n_requests ?? 1
+                const model = result.model || result.snapshot_id || 'Sin especificar'
                 
                 // Calcular costo aproximado
                 const modelLower = model.toLowerCase()
@@ -234,11 +237,12 @@ export async function getOpenAIUsage(
             } else {
               bucketsWithoutData++
               // Si no hay resultados en el bucket, puede ser que los datos agregados estén en el bucket mismo
-              // Algunos endpoints devuelven datos agregados directamente en el bucket
-              if (bucket.n_context_tokens_total !== undefined || bucket.n_generated_tokens_total !== undefined) {
-                const tokens = (bucket.n_context_tokens_total || 0) + (bucket.n_generated_tokens_total || 0)
-                const requests = bucket.n_requests || 0
-                const model = bucket.snapshot_id || bucket.model || 'aggregated'
+              const bucketInput = bucket.input_tokens ?? bucket.n_context_tokens_total
+              const bucketOutput = bucket.output_tokens ?? bucket.n_generated_tokens_total
+              if (bucketInput !== undefined || bucketOutput !== undefined) {
+                const tokens = (bucketInput || 0) + (bucketOutput || 0)
+                const requests = bucket.num_model_requests ?? bucket.n_requests ?? 0
+                const model = bucket.model || bucket.snapshot_id || 'aggregated'
                 
                 if (tokens > 0 || requests > 0) {
                   bucketsWithData++
@@ -457,12 +461,12 @@ export async function getOpenAIUsage(
         }
         
         // Extraer información del item
-        // OpenAI puede devolver diferentes estructuras según el tipo de API
-        // Para chat completions: n_context_tokens_total, n_generated_tokens_total, n_requests
-        // Para otros: pueden tener campos diferentes
-        const tokens = item.n_context_tokens_total || item.n_generated_tokens_total || item.n_tokens || 0
-        const requests = item.n_requests || 1
-        const model = item.model || item.snapshot_id || item.type || 'unknown'
+        // API actual: input_tokens, output_tokens, num_model_requests; legacy: n_context_tokens_total, n_generated_tokens_total, n_requests
+        const tokens = (item.input_tokens != null || item.output_tokens != null)
+          ? (item.input_tokens || 0) + (item.output_tokens || 0)
+          : (item.n_context_tokens_total || 0) + (item.n_generated_tokens_total || 0) || (item.n_tokens || 0)
+        const requests = item.num_model_requests ?? item.n_requests ?? 1
+        const model = item.model || item.snapshot_id || item.type || 'Sin especificar'
         
         // Calcular costo aproximado basado en el modelo y tokens
         // Esto es una estimación ya que OpenAI no siempre devuelve el costo directamente
