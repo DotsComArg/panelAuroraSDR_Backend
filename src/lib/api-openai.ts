@@ -573,7 +573,7 @@ export async function getOpenAIUsageFromDB(
       groupedByDate[dateStr].tokens += record.tokensUsed || 0
       groupedByDate[dateStr].requests += 1
 
-      const model = record.model || 'unknown'
+      const model = record.model?.trim() || 'Sin especificar'
       if (!groupedByDate[dateStr].models[model]) {
         groupedByDate[dateStr].models[model] = {
           tokens: 0,

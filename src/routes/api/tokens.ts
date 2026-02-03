@@ -4,6 +4,8 @@
  */
 
 import { Router, Request, Response } from 'express';
+import { ObjectId } from 'mongodb';
+import { getMongoDb } from '../../lib/mongodb.js';
 import {
   getOpenAICredentialsForCustomer,
   getOpenAIUsage,
@@ -11,6 +13,9 @@ import {
 } from '../../lib/api-openai.js';
 
 const router = Router();
+
+/** Valor por defecto cuando no se envía modelo en track (evita "unknown" en la UI) */
+const DEFAULT_MODEL_LABEL = 'Sin especificar';
 
 function getParam(name: string, req: Request): string | null {
   const v = req.query[name];
@@ -317,6 +322,48 @@ router.get('/stats', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: 'Error al obtener estadísticas de tokens',
+    });
+  }
+});
+
+// POST /api/tokens/track — Registrar una llamada a OpenAI (modelo + tokens) para que el panel muestre uso real
+router.post('/track', async (req: Request, res: Response) => {
+  try {
+    const body = req.body as { customerId?: string; model?: string; tokensUsed?: number; operation?: string };
+    const customerId = (body.customerId ?? '').trim();
+    let model = (body.model ?? '').trim() || DEFAULT_MODEL_LABEL;
+    const tokensUsed = typeof body.tokensUsed === 'number' ? body.tokensUsed : Number(body.tokensUsed);
+
+    if (!customerId) {
+      return res.status(400).json({ success: false, error: 'customerId es requerido' });
+    }
+    if (!ObjectId.isValid(customerId)) {
+      return res.status(400).json({ success: false, error: 'customerId no es un ID válido' });
+    }
+    if (Number.isNaN(tokensUsed) || tokensUsed < 0) {
+      return res.status(400).json({ success: false, error: 'tokensUsed debe ser un número >= 0' });
+    }
+
+    const db = await getMongoDb();
+    const doc = {
+      customerId: new ObjectId(customerId),
+      date: new Date(),
+      model,
+      tokensUsed: Math.round(tokensUsed),
+      operation: body.operation || 'chat-completion',
+    };
+    const result = await db.collection('tokenUsage').insertOne(doc);
+
+    return res.json({
+      success: true,
+      message: 'Uso registrado correctamente',
+      data: { id: result.insertedId, tokensUsed: doc.tokensUsed, model: doc.model },
+    });
+  } catch (e) {
+    console.error('[TOKENS] Error track:', e);
+    return res.status(500).json({
+      success: false,
+      error: 'Error al registrar uso de tokens',
     });
   }
 });
