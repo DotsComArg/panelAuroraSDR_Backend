@@ -800,19 +800,18 @@ router.put('/:customerId', async (req: Request, res: Response) => {
       const existingAccounts = existing.kommoAccounts || (existing.kommoCredentials ? [existing.kommoCredentials] : []);
       updateData.kommoAccounts = body.kommoAccounts
         .filter((acc: any) => acc && (acc.accessToken === '__KEEP__' || (typeof acc.accessToken === 'string' && acc.accessToken.length > 0)))
-        .map((acc: any, i: number) => {
+        .flatMap((acc: any, i: number) => {
           const keepToken = acc.accessToken === '__KEEP__';
           const keepSecret = acc.secretKey === '__KEEP__';
           const existingAcc = existingAccounts[i];
-          if (keepToken && !existingAcc?.accessToken) return null;
-          return {
+          if (keepToken && !existingAcc?.accessToken) return [];
+          return [{
             baseUrl: acc.baseUrl || (existingAcc?.baseUrl || ''),
             accessToken: keepToken && existingAcc?.accessToken ? existingAcc.accessToken : encrypt(acc.accessToken),
             integrationId: acc.integrationId ?? existingAcc?.integrationId,
             secretKey: keepSecret && existingAcc?.secretKey ? existingAcc.secretKey : (acc.secretKey && acc.secretKey !== '__KEEP__' ? encrypt(acc.secretKey) : undefined),
-          };
-        })
-        .filter(Boolean);
+          }];
+        });
     }
 
     if (body.postgresCredentials?.connectionString) {
