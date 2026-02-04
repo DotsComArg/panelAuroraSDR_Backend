@@ -52,16 +52,19 @@ Cuando Kommo detecta cambios en los leads, enviará un webhook a nuestro endpoin
 
 El sistema:
 1. Recibe el webhook
-2. Identifica el cliente por `account.id` o por la URL base de Kommo
+2. Identifica el cliente y la **cuenta Kommo** por `account.id` (subdominio de la URL de Kommo: ej. `12345` de `https://12345.kommo.com`). Soporta múltiples cuentas por cliente (Kommo 1, Kommo 2, etc.).
 3. Obtiene los leads completos desde la API de Kommo (con todos sus campos)
-4. Actualiza la base de datos con los nuevos datos
+4. Actualiza la base de datos en la cuenta correcta (`kommoAccountIndex`)
 5. Responde con 200 OK a Kommo
+
+**Varias cuentas:** Si un cliente tiene Kommo 1 y Kommo 2, cada una debe tener su webhook en Kommo apuntando a la **misma URL**. El panel identifica qué cuenta es por el `account.id` que envía Kommo (cada cuenta tiene un subdominio distinto).
 
 ## Verificación
 
 Para verificar que el webhook está funcionando:
 
-1. **Revisa los logs del servidor:**
+1. **Revisa los logs en Admin:** Ve a **Admin → Logs de Webhooks Kommo**. Ahí verás cada webhook recibido, la cuenta (Kommo 1 / Kommo 2), leads procesados y posibles errores.
+2. **Revisa los logs del servidor:**
    - Busca mensajes que comiencen con `[KOMMO WEBHOOK]`
    - Deberías ver mensajes como:
      - `[KOMMO WEBHOOK] Recibida petición de webhook`

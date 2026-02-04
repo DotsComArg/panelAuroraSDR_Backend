@@ -130,7 +130,10 @@ router.get('/kommo', async (req: Request, res: Response) => {
     // Si no hay datos, devolver estadísticas vacías en lugar de cargar desde API (evita demoras)
     if (!refresh) {
       const { getKommoLeadsFromDb } = await import('../../lib/kommo-leads-storage.js');
-      const { leads: dbLeads, totalAll } = await getKommoLeadsFromDb(cleanCustomerId, { kommoAccountIndex: accountIndex });
+      // Traer todos los leads de esta cuenta para estadísticas (sin límite para embudos completos)
+      const { leads: dbLeads, totalAll } = await getKommoLeadsFromDb(cleanCustomerId, {
+        kommoAccountIndex: accountIndex,
+      });
       
       // Si hay datos en BD, calcular estadísticas desde ahí (más rápido)
       if (dbLeads.length > 0 && totalAll > 0) {
@@ -786,6 +789,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
   const webhookLogId = new Date().toISOString() + '_' + Math.random().toString(36).substr(2, 9);
   const startTime = Date.now();
   let customerId: string | null = null;
+  let accountIndex = 0; // 0 = primera cuenta (kommoCredentials), 1+ = kommoAccounts
   let accountId: string | null | undefined = null;
   let success = false;
   let errorMessage: string | null = null;
@@ -867,26 +871,40 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     const customers = await db.collection('customers').find({}).toArray();
     
     // Si tenemos accountId, buscar por él (método principal y más seguro)
+    // Comprobar kommoCredentials (cuenta 0) y kommoAccounts (cuenta 1, 2, ...)
     if (accountId) {
       console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Buscando cliente por accountId: ${accountId}`);
+      const accountIdStr = accountId.toString();
       for (const customer of customers) {
-        if (customer.kommoCredentials) {
-          const baseUrl = customer.kommoCredentials.baseUrl || '';
-          // La URL de Kommo es típicamente: https://{accountId}.kommo.com
-          // También puede ser: https://{accountId}.kommo.com/ o con subdominios
-          const urlMatch = baseUrl.match(/https?:\/\/([^.]+)\.kommo\.com/i);
-          if (urlMatch) {
-            const urlAccountId = urlMatch[1];
-            // Comparar accountId (puede ser string o number)
-            if (urlAccountId === accountId.toString() || urlAccountId === String(accountId)) {
+        let accIdx = 0;
+        // Cuenta 0: kommoCredentials
+        if (customer.kommoCredentials?.baseUrl) {
+          const urlMatch = (customer.kommoCredentials.baseUrl || '').match(/https?:\/\/([^.]+)\.kommo\.com/i);
+          if (urlMatch && (urlMatch[1] === accountIdStr || urlMatch[1] === String(accountId))) {
+            customerId = customer._id.toString();
+            accountIndex = 0;
+            console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente identificado: ${customerId} (${customer.nombre || customer.email || 'Sin nombre'}) cuenta Kommo 1 (accountId: ${accountId})`);
+            break;
+          }
+          accIdx++;
+        }
+        // Cuentas 1, 2, ...: kommoAccounts
+        const kommoAccounts = (customer as any).kommoAccounts;
+        if (customerId) break;
+        if (kommoAccounts && Array.isArray(kommoAccounts)) {
+          for (let i = 0; i < kommoAccounts.length; i++) {
+            const baseUrl = kommoAccounts[i]?.baseUrl || '';
+            const urlMatch = baseUrl.match(/https?:\/\/([^.]+)\.kommo\.com/i);
+            if (urlMatch && (urlMatch[1] === accountIdStr || urlMatch[1] === String(accountId))) {
               customerId = customer._id.toString();
-              console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente identificado: ${customerId} (${customer.nombre || customer.email || 'Sin nombre'}) por accountId: ${accountId}`);
+              accountIndex = (customer.kommoCredentials?.baseUrl ? 1 : 0) + i;
+              console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente identificado: ${customerId} (${customer.nombre || customer.email || 'Sin nombre'}) cuenta Kommo ${accountIndex + 1} (accountId: ${accountId})`);
               break;
             }
           }
         }
+        if (customerId) break;
       }
-      
       if (!customerId) {
         console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ No se encontró cliente con accountId: ${accountId}`);
       }
@@ -1037,6 +1055,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
           logId: webhookLogId,
           customerId: customerId,
           accountId: accountId,
+          accountIndex,
           success: true,
           processedLeads: 0,
           deletedLeads: 0,
@@ -1060,8 +1079,8 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
 
     console.log(`[KOMMO WEBHOOK] Procesando ${allLeadIds.size} leads: ${Array.from(allLeadIds).join(', ')}`);
 
-    // Obtener credenciales del cliente
-    const credentials = await getKommoCredentialsForCustomer(customerId);
+    // Obtener credenciales del cliente para la cuenta que envió el webhook
+    const credentials = await getKommoCredentialsForCustomer(customerId, accountIndex);
     if (!credentials) {
       console.error(`[KOMMO WEBHOOK] [${webhookLogId}] No se encontraron credenciales para customerId: ${customerId}`);
       // Guardar log del error antes de responder
@@ -1071,6 +1090,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
           logId: webhookLogId,
           customerId: customerId,
           accountId: accountId,
+          accountIndex,
           success: false,
           processedLeads: 0,
           deletedLeads: 0,
@@ -1117,8 +1137,11 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
         // Si es un lead eliminado, marcarlo como eliminado en BD
         if (deletedLeadIdsSet.has(leadId)) {
           const db = await getMongoDb();
+          const deleteFilter = accountIndex === 0
+            ? { customerId: customerId.trim(), $or: [{ kommoAccountIndex: 0 }, { kommoAccountIndex: { $exists: false } }], id: leadId }
+            : { customerId: customerId.trim(), kommoAccountIndex: accountIndex, id: leadId };
           const deleteResult = await db.collection('kommo_leads').updateOne(
-            { customerId: customerId.trim(), id: leadId },
+            deleteFilter,
             { $set: { is_deleted: true, syncedAt: new Date(), lastModifiedAt: new Date() } }
           );
           console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Lead ${leadId} marcado como eliminado (matched: ${deleteResult.matchedCount}, modified: ${deleteResult.modifiedCount})`);
@@ -1177,7 +1200,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     if (leadsToSync.length > 0) {
       console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Sincronizando ${leadsToSync.length} leads a MongoDB...`);
       try {
-        const syncResult = await syncKommoLeads(customerId, leadsToSync, false);
+        const syncResult = await syncKommoLeads(customerId, leadsToSync, false, accountIndex);
         console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Sincronización completada:`, {
           totalProcessed: syncResult.totalProcessed,
           newLeads: syncResult.newLeads,
@@ -1213,6 +1236,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
       logId: webhookLogId,
       customerId: customerId!,
       accountId: accountId,
+      accountIndex,
       success: true,
       processedLeads,
       deletedLeads,
@@ -1251,6 +1275,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
         logId: webhookLogId,
         customerId: customerId || 'unknown',
         accountId: accountId || undefined,
+        accountIndex,
         success: false,
         processedLeads: 0,
         deletedLeads: 0,
@@ -1279,6 +1304,7 @@ async function saveWebhookLog(logData: {
   logId: string;
   customerId: string;
   accountId: string | null | undefined;
+  accountIndex?: number;
   success: boolean;
   processedLeads: number;
   deletedLeads: number;
@@ -1314,6 +1340,7 @@ async function saveWebhookLog(logData: {
       logId: logData.logId,
       customerId: logData.customerId,
       accountId: logData.accountId || null,
+      accountIndex: logData.accountIndex ?? 0,
       success: logData.success,
       processedLeads: logData.processedLeads,
       deletedLeads: logData.deletedLeads,
@@ -1395,13 +1422,16 @@ router.get('/kommo/webhook/logs', async (req: Request, res: Response) => {
     const customers = await db.collection('customers').find({}).toArray();
     const customersMap = new Map(customers.map(c => [c._id.toString(), c]));
     
-    // Enriquecer logs con información del cliente
+    // Enriquecer logs con información del cliente y etiqueta de cuenta
     const enrichedLogs = logs.map((log: any) => {
       const customer = customersMap.get(log.customerId);
+      const accIdx = log.accountIndex ?? 0;
       return {
         ...log,
         customerName: customer ? `${customer.nombre || ''} ${customer.apellido || ''}`.trim() : 'Cliente desconocido',
         customerEmail: customer?.email || null,
+        accountIndex: accIdx,
+        accountLabel: `Kommo ${accIdx + 1}`,
       };
     });
     
