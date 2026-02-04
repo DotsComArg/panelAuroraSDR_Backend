@@ -1464,9 +1464,31 @@ export function createKommoClient(credentials: KommoCredentials): KommoApiClient
 }
 
 /**
- * Obtiene las credenciales de Kommo de un cliente y las desencripta
+ * Obtiene la cantidad de cuentas Kommo configuradas para un cliente (1-based para UI: Kommo 1, Kommo 2, ...)
  */
-export async function getKommoCredentialsForCustomer(customerId: string): Promise<KommoCredentials | null> {
+export async function getKommoAccountsCount(customerId: string): Promise<number> {
+  try {
+    const { getMongoDb } = await import('./mongodb.js')
+    const { ObjectId } = await import('mongodb')
+    const db = await getMongoDb()
+    const customer = await db.collection('customers').findOne({
+      _id: new ObjectId(customerId)
+    })
+    if (!customer) return 0
+    if (customer.kommoAccounts && Array.isArray(customer.kommoAccounts) && customer.kommoAccounts.length > 0) {
+      return customer.kommoAccounts.length
+    }
+    if (customer.kommoCredentials?.accessToken) return 1
+    return 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Obtiene las credenciales de Kommo de un cliente para la cuenta indicada (accountIndex 0-based) y las desencripta
+ */
+export async function getKommoCredentialsForCustomer(customerId: string, accountIndex: number = 0): Promise<KommoCredentials | null> {
   try {
     const { getMongoDb } = await import('./mongodb.js')
     const { ObjectId } = await import('mongodb')
@@ -1481,20 +1503,24 @@ export async function getKommoCredentialsForCustomer(customerId: string): Promis
       return null
     }
     
-    if (!customer.kommoCredentials) {
-      console.error('[KOMMO] Cliente no tiene credenciales de Kommo:', customerId)
-      return null
+    let encrypted: { baseUrl?: string; accessToken: string; integrationId?: string; secretKey?: string } | null = null
+    
+    if (customer.kommoAccounts && Array.isArray(customer.kommoAccounts) && customer.kommoAccounts.length > accountIndex) {
+      encrypted = customer.kommoAccounts[accountIndex] as any
+    } else if (accountIndex === 0 && customer.kommoCredentials?.accessToken) {
+      encrypted = customer.kommoCredentials
     }
     
-    const encrypted = customer.kommoCredentials
+    if (!encrypted?.accessToken) {
+      console.error('[KOMMO] Cliente no tiene credenciales de Kommo para cuenta índice:', accountIndex, customerId)
+      return null
+    }
     
     try {
       // Normalizar baseUrl al obtenerlo de la base de datos
       let baseUrl = encrypted.baseUrl?.trim() || ''
       if (baseUrl) {
-        // Remover trailing slash
         baseUrl = baseUrl.replace(/\/+$/, '')
-        // Asegurar que tenga protocolo
         if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
           baseUrl = `https://${baseUrl}`
         }
@@ -1509,12 +1535,10 @@ export async function getKommoCredentialsForCustomer(customerId: string): Promis
       
       console.log('[KOMMO] Credenciales obtenidas de BD:', {
         customerId,
+        accountIndex,
         baseUrlOriginal: encrypted.baseUrl,
         baseUrlNormalizado: credentials.baseUrl,
         hasAccessToken: !!credentials.accessToken,
-        accessTokenLength: credentials.accessToken?.length || 0,
-        hasIntegrationId: !!credentials.integrationId,
-        hasSecretKey: !!credentials.secretKey,
       })
       
       return credentials

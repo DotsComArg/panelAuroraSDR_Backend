@@ -31,13 +31,20 @@ export interface Customer {
   customConfig?: {
     [key: string]: any;
   };
-  // Credenciales de Kommo encriptadas
+  // Credenciales de Kommo encriptadas (una cuenta; se mantiene por compatibilidad)
   kommoCredentials?: {
     baseUrl: string; // URL base de Kommo (ej: https://dotscomagency.kommo.com)
     accessToken: string; // Access token encriptado
     integrationId?: string; // ID de integración (opcional)
     secretKey?: string; // Secret key encriptado (opcional)
   };
+  // Múltiples cuentas Kommo por cliente (Kommo 1, Kommo 2, ...)
+  kommoAccounts?: Array<{
+    baseUrl: string;
+    accessToken: string;
+    integrationId?: string;
+    secretKey?: string;
+  }>;
   // Credenciales de PostgreSQL/n8n encriptadas
   postgresCredentials?: {
     connectionString: string; // Connection string encriptado (postgresql://user:pass@host:port/db)
@@ -79,6 +86,12 @@ export interface CreateCustomerDto {
     integrationId?: string;
     secretKey?: string; // Secret sin encriptar (se encriptará al guardar)
   };
+  kommoAccounts?: Array<{
+    baseUrl: string;
+    accessToken: string;
+    integrationId?: string;
+    secretKey?: string;
+  }>;
   postgresCredentials?: {
     connectionString: string; // Connection string sin encriptar (se encriptará al guardar)
   };

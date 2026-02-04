@@ -267,12 +267,18 @@ router.get('/features', async (req: Request, res: Response) => {
       ? customer.enabledViews.filter(view => VALID_VIEWS.includes(view)) // Filtrar inválidos
       : getDefaultViews(customer.planContratado || 'Básico');
     
-    console.log('[FEATURES] Vistas a devolver:', enabledViews);
+    // Cantidad de cuentas Kommo (para mostrar Kommo 1, Kommo 2, ... en el sidebar)
+    const kommoAccountsCount = customer.kommoAccounts && Array.isArray(customer.kommoAccounts) && customer.kommoAccounts.length > 0
+      ? customer.kommoAccounts.length
+      : (customer.kommoCredentials?.accessToken ? 1 : 0);
+    
+    console.log('[FEATURES] Vistas a devolver:', enabledViews, 'kommoAccountsCount:', kommoAccountsCount);
     
     return res.json({
       success: true,
       data: {
         enabledViews: enabledViews,
+        kommoAccountsCount,
       },
     });
   } catch (error) {
@@ -681,7 +687,6 @@ router.post('/', async (req: Request, res: Response) => {
       updatedAt: new Date(),
     };
 
-    // Encriptar credenciales si existen
     if (body.kommoCredentials?.accessToken) {
       customerData.kommoCredentials = {
         baseUrl: body.kommoCredentials.baseUrl,
@@ -689,6 +694,16 @@ router.post('/', async (req: Request, res: Response) => {
         integrationId: body.kommoCredentials.integrationId,
         secretKey: body.kommoCredentials.secretKey ? encrypt(body.kommoCredentials.secretKey) : undefined,
       };
+    }
+    if (body.kommoAccounts && Array.isArray(body.kommoAccounts) && body.kommoAccounts.length > 0) {
+      customerData.kommoAccounts = body.kommoAccounts
+        .filter((acc: any) => acc?.accessToken)
+        .map((acc: any) => ({
+          baseUrl: acc.baseUrl || '',
+          accessToken: encrypt(acc.accessToken),
+          integrationId: acc.integrationId,
+          secretKey: acc.secretKey ? encrypt(acc.secretKey) : undefined,
+        }));
     }
 
     if (body.postgresCredentials?.connectionString) {
@@ -773,7 +788,6 @@ router.put('/:customerId', async (req: Request, res: Response) => {
     if (body.enabledViews) updateData.enabledViews = body.enabledViews;
     if (body.customConfig) updateData.customConfig = body.customConfig;
 
-    // Manejar credenciales
     if (body.kommoCredentials) {
       updateData.kommoCredentials = {
         baseUrl: body.kommoCredentials.baseUrl,
@@ -781,6 +795,24 @@ router.put('/:customerId', async (req: Request, res: Response) => {
         integrationId: body.kommoCredentials.integrationId,
         secretKey: body.kommoCredentials.secretKey ? encrypt(body.kommoCredentials.secretKey) : undefined,
       };
+    }
+    if (body.kommoAccounts !== undefined && Array.isArray(body.kommoAccounts)) {
+      const existingAccounts = existing.kommoAccounts || (existing.kommoCredentials ? [existing.kommoCredentials] : []);
+      updateData.kommoAccounts = body.kommoAccounts
+        .filter((acc: any) => acc && (acc.accessToken === '__KEEP__' || (typeof acc.accessToken === 'string' && acc.accessToken.length > 0)))
+        .map((acc: any, i: number) => {
+          const keepToken = acc.accessToken === '__KEEP__';
+          const keepSecret = acc.secretKey === '__KEEP__';
+          const existingAcc = existingAccounts[i];
+          if (keepToken && !existingAcc?.accessToken) return null;
+          return {
+            baseUrl: acc.baseUrl || (existingAcc?.baseUrl || ''),
+            accessToken: keepToken && existingAcc?.accessToken ? existingAcc.accessToken : encrypt(acc.accessToken),
+            integrationId: acc.integrationId ?? existingAcc?.integrationId,
+            secretKey: keepSecret && existingAcc?.secretKey ? existingAcc.secretKey : (acc.secretKey && acc.secretKey !== '__KEEP__' ? encrypt(acc.secretKey) : undefined),
+          };
+        })
+        .filter(Boolean);
     }
 
     if (body.postgresCredentials?.connectionString) {

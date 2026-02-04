@@ -18,6 +18,8 @@ import type { KommoLead } from './api-kommo.js';
 interface StoredKommoLead extends KommoLead {
   _id?: ObjectId;
   customerId: string;
+  /** Índice de cuenta Kommo (0-based). Por defecto 0 para compatibilidad. */
+  kommoAccountIndex?: number;
   syncedAt: Date;
   lastModifiedAt: Date;
 }
@@ -39,46 +41,53 @@ export async function initializeKommoLeadsIndexes(): Promise<void> {
     const db = await getMongoDb();
     const collection = db.collection('kommo_leads');
 
-    // Índice compuesto para búsquedas por customerId y filtros comunes
-    // IMPORTANTE: El índice debe permitir nulls o usar sparse index
-    // Primero eliminar TODOS los índices antiguos que puedan causar problemas
+    // Migración: asegurar que todos los documentos tengan kommoAccountIndex (default 0)
+    try {
+      const updateResult = await collection.updateMany(
+        { kommoAccountIndex: { $exists: false } },
+        { $set: { kommoAccountIndex: 0 } }
+      );
+      if (updateResult.modifiedCount > 0) {
+        console.log(`[KOMMO STORAGE] Migración: ${updateResult.modifiedCount} documentos actualizados con kommoAccountIndex: 0`);
+      }
+    } catch (migError: any) {
+      console.warn('[KOMMO STORAGE] Migración kommoAccountIndex:', migError?.message);
+    }
+
     const indexesToDrop = [
       'customerId_leadId_unique',
-      'customerId_1_leadId_1',  // Índice antiguo que usa leadId
-      'customerId_1_id_1'        // Otro posible índice antiguo
+      'customerId_1_leadId_1',
+      'customerId_1_id_1',
+      'customerId_kommoAccountIndex_id_unique',
     ];
-    
     for (const indexName of indexesToDrop) {
       try {
         await collection.dropIndex(indexName);
         console.log(`[KOMMO STORAGE] Índice antiguo eliminado: ${indexName}`);
       } catch (error: any) {
-        // El índice puede no existir, está bien
         if (!error.message?.includes('index not found')) {
           console.warn(`[KOMMO STORAGE] Error al eliminar índice ${indexName}:`, error.message);
         }
       }
     }
-    
-    // Crear índice sparse que ignora documentos con id null
+
+    // Índice único por cliente + cuenta Kommo + id de lead
     await collection.createIndex(
-      { customerId: 1, id: 1 },
-      { 
-        unique: true, 
-        name: 'customerId_leadId_unique',
-        sparse: true, // Ignora documentos donde id es null o no existe
-        partialFilterExpression: { id: { $exists: true, $ne: null } } // Solo indexar documentos con id válido
+      { customerId: 1, kommoAccountIndex: 1, id: 1 },
+      {
+        unique: true,
+        name: 'customerId_kommoAccountIndex_id_unique',
+        partialFilterExpression: { id: { $exists: true, $ne: null } },
       }
     );
 
-    // Índices para filtros comunes
-    await collection.createIndex({ customerId: 1, pipeline_id: 1 });
-    await collection.createIndex({ customerId: 1, status_id: 1 });
-    await collection.createIndex({ customerId: 1, responsible_user_id: 1 });
-    await collection.createIndex({ customerId: 1, created_at: 1 });
-    await collection.createIndex({ customerId: 1, closed_at: 1 });
-    await collection.createIndex({ customerId: 1, is_deleted: 1 });
-    await collection.createIndex({ customerId: 1, syncedAt: 1 });
+    await collection.createIndex({ customerId: 1, kommoAccountIndex: 1, pipeline_id: 1 });
+    await collection.createIndex({ customerId: 1, kommoAccountIndex: 1, status_id: 1 });
+    await collection.createIndex({ customerId: 1, kommoAccountIndex: 1, responsible_user_id: 1 });
+    await collection.createIndex({ customerId: 1, kommoAccountIndex: 1, created_at: 1 });
+    await collection.createIndex({ customerId: 1, kommoAccountIndex: 1, closed_at: 1 });
+    await collection.createIndex({ customerId: 1, kommoAccountIndex: 1, is_deleted: 1 });
+    await collection.createIndex({ customerId: 1, kommoAccountIndex: 1, syncedAt: 1 });
 
     console.log('[KOMMO STORAGE] Índices inicializados correctamente');
   } catch (error) {
@@ -87,14 +96,24 @@ export async function initializeKommoLeadsIndexes(): Promise<void> {
   }
 }
 
+/** Query base por customerId y cuenta Kommo (compatibilidad: sin campo = cuenta 0) */
+function accountFilter(customerId: string, kommoAccountIndex: number): any {
+  const base = { customerId: customerId.trim() };
+  if (kommoAccountIndex === 0) {
+    return { ...base, $or: [{ kommoAccountIndex: 0 }, { kommoAccountIndex: { $exists: false } }] };
+  }
+  return { ...base, kommoAccountIndex };
+}
+
 /**
  * Sincroniza leads desde la API de Kommo a MongoDB
- * Solo sincroniza leads nuevos o modificados desde la última sincronización
+ * kommoAccountIndex: 0-based (0 = primera cuenta)
  */
 export async function syncKommoLeads(
   customerId: string,
   leads: KommoLead[],
-  forceFullSync: boolean = false
+  forceFullSync: boolean = false,
+  kommoAccountIndex: number = 0
 ): Promise<SyncResult> {
   const startTime = Date.now();
   const db = await getMongoDb();
@@ -106,8 +125,8 @@ export async function syncKommoLeads(
   let errors = 0;
 
   try {
-    // Limpiar customerId para asegurar coincidencia exacta
     const cleanCustomerId = customerId.trim();
+    const accFilter = accountFilter(cleanCustomerId, kommoAccountIndex);
     
     console.log(`[KOMMO STORAGE] ==========================================`);
     console.log(`[KOMMO STORAGE] Iniciando syncKommoLeads`);
@@ -121,7 +140,7 @@ export async function syncKommoLeads(
     if (forceFullSync) {
       console.log(`[KOMMO STORAGE] Limpiando documentos con id Y leadId ambos null o inválidos...`);
       const cleanupResult = await collection.deleteMany({
-        customerId: cleanCustomerId,
+        ...accFilter,
         $and: [
           {
             $or: [
@@ -144,9 +163,8 @@ export async function syncKommoLeads(
       }
     }
     
-    // Obtener el timestamp de la última sincronización
     const lastSync = await collection.findOne(
-      { customerId: cleanCustomerId, id: { $ne: null as any, $exists: true } },
+      { ...accFilter, id: { $ne: null as any, $exists: true } },
       { sort: { syncedAt: -1 }, projection: { syncedAt: 1 } }
     );
 
@@ -202,7 +220,7 @@ export async function syncKommoLeads(
       const existingLeads = await collection
         .find(
           { 
-            customerId: cleanCustomerId,
+            ...accFilter,
             id: { $exists: true, $ne: null, $type: 'number' } as any
           },
           { 
@@ -297,7 +315,8 @@ export async function syncKommoLeads(
 
           const storedLead: StoredKommoLead = {
             ...lead,
-            customerId: cleanCustomerId, // Asegurar que el customerId esté correctamente asignado
+            customerId: cleanCustomerId,
+            kommoAccountIndex,
             syncedAt: now,
             lastModifiedAt: new Date(leadLastModified),
           };
@@ -324,9 +343,12 @@ export async function syncKommoLeads(
             continue;
           }
 
+          const filter = kommoAccountIndex === 0
+            ? { customerId: cleanCustomerId, $or: [{ kommoAccountIndex: 0 }, { kommoAccountIndex: { $exists: false } }], id: lead.id }
+            : { customerId: cleanCustomerId, kommoAccountIndex, id: lead.id };
           operations.push({
             updateOne: {
-              filter: { customerId: cleanCustomerId, id: lead.id },
+              filter,
               update: { $set: storedLead },
               upsert: true,
             },
@@ -453,13 +475,16 @@ export async function syncKommoLeads(
                     // Primero limpiar documentos con leadId null para este lead específico
                     console.warn(`[KOMMO STORAGE] ⚠️  Error de duplicado para lead ${errorLeadId}. Limpiando documentos problemáticos...`);
                     try {
-                      // Eliminar cualquier documento con id o leadId null para este customerId y leadId
                       await collection.deleteMany({
-                        customerId: cleanCustomerId,
-                        $or: [
-                          { id: errorLeadId, leadId: { $eq: null as any } },
-                          { leadId: errorLeadId, id: { $eq: null as any } },
-                          { id: { $eq: null as any }, leadId: { $eq: null as any } },
+                        $and: [
+                          accFilter,
+                          {
+                            $or: [
+                              { id: errorLeadId, leadId: { $eq: null as any } },
+                              { leadId: errorLeadId, id: { $eq: null as any } },
+                              { id: { $eq: null as any }, leadId: { $eq: null as any } },
+                            ],
+                          },
                         ],
                       } as any);
                       
@@ -584,13 +609,11 @@ export async function syncKommoLeads(
     // Si el proceso se interrumpe (timeout, error), NO marcar como eliminados
     // porque podríamos estar marcando leads válidos que simplemente no se procesaron aún
     if (isFullSync && errors === 0 && newLeads + updatedLeads >= leadsToProcess.length * 0.95) {
-      // Solo marcar como eliminados si procesamos al menos el 95% de los leads sin errores
-      // Esto previene marcar como eliminados leads válidos si el proceso se interrumpe
       const apiLeadIds = new Set(validLeads.map(l => l.id).filter(id => id != null));
       console.log(`[KOMMO STORAGE] Marcando como eliminados leads que ya no están en la API. IDs válidos: ${apiLeadIds.size}`);
       const deletedResult = await collection.updateMany(
         {
-          customerId: cleanCustomerId,
+          ...accFilter,
           id: { $nin: Array.from(apiLeadIds) },
           is_deleted: { $ne: true } as any,
         },
@@ -610,21 +633,20 @@ export async function syncKommoLeads(
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
 
-    // Verificar cuántos leads hay realmente en la BD después de la sincronización
-    const verifyCount = await collection.countDocuments({ customerId: cleanCustomerId });
+    const verifyCount = await collection.countDocuments(accFilter);
     const verifyActiveCount = await collection.countDocuments({ 
-      customerId: cleanCustomerId, 
+      ...accFilter, 
       is_deleted: { $ne: true } as any 
     });
     const verifyWithValidId = await collection.countDocuments({ 
-      customerId: cleanCustomerId,
+      ...accFilter,
       id: { $exists: true, $ne: null, $type: 'number' } as any
     });
 
     const skippedLeads = validLeads.length - leadsToProcess.length;
     
     console.log(`[KOMMO STORAGE] ==========================================`);
-    console.log(`[KOMMO STORAGE] Sincronización completada para customerId "${cleanCustomerId}":`);
+    console.log(`[KOMMO STORAGE] Sincronización completada para customerId "${cleanCustomerId}" cuenta ${kommoAccountIndex}:`);
     console.log(`[KOMMO STORAGE]   - Total recibidos: ${leads.length}`);
     console.log(`[KOMMO STORAGE]   - Total válidos: ${validLeads.length}`);
     console.log(`[KOMMO STORAGE]   - Leads procesados: ${leadsToProcess.length} (${newLeadsList.length} nuevos + ${existingLeadsList.length} modificados)`);
@@ -652,7 +674,8 @@ export async function syncKommoLeads(
 }
 
 /**
- * Obtiene leads desde MongoDB con filtros
+ * Obtiene leads desde MongoDB con filtros.
+ * kommoAccountIndex: 0-based (0 = primera cuenta).
  */
 export async function getKommoLeadsFromDb(
   customerId: string,
@@ -668,30 +691,28 @@ export async function getKommoLeadsFromDb(
     tagIds?: number[];
     limit?: number;
     skip?: number;
+    kommoAccountIndex?: number;
   } = {}
 ): Promise<{ leads: KommoLead[]; total: number; totalAll: number }> {
   try {
     const db = await getMongoDb();
     const collection = db.collection<StoredKommoLead>('kommo_leads');
-
-    // Limpiar customerId para asegurar coincidencia exacta
     const cleanCustomerId = customerId.trim();
+    const kommoAccountIndex = filters.kommoAccountIndex ?? 0;
+    const accFilter = accountFilter(cleanCustomerId, kommoAccountIndex);
     
-    console.log(`[KOMMO STORAGE] Buscando leads para customerId: "${cleanCustomerId}" (length: ${cleanCustomerId.length})`);
+    console.log(`[KOMMO STORAGE] Buscando leads para customerId: "${cleanCustomerId}" cuenta ${kommoAccountIndex}`);
     
-    // Primero, verificar cuántos leads hay en total para este customerId
-    const sampleLead = await collection.findOne({ customerId: cleanCustomerId });
+    const sampleLead = await collection.findOne(accFilter);
     if (sampleLead) {
-      console.log(`[KOMMO STORAGE] Lead de muestra encontrado con customerId: "${sampleLead.customerId}" (length: ${sampleLead.customerId.length})`);
+      console.log(`[KOMMO STORAGE] Lead de muestra encontrado`);
     } else {
-      // Si no encuentra, intentar buscar todos los customerIds únicos para debug
       const distinctCustomerIds = await collection.distinct('customerId');
       console.log(`[KOMMO STORAGE] No se encontraron leads. CustomerIds únicos en BD:`, distinctCustomerIds.slice(0, 5));
     }
 
-    // Construir query
     const query: any = { 
-      customerId: cleanCustomerId, 
+      ...accFilter, 
       is_deleted: { $ne: true } as any 
     };
 
@@ -726,8 +747,7 @@ export async function getKommoLeadsFromDb(
       query['_embedded.tags.id'] = { $in: filters.tagIds };
     }
 
-    // Obtener total ANTES de aplicar filtro de is_deleted (para incluir todos los leads)
-    const totalAllLeads = await collection.countDocuments({ customerId: cleanCustomerId });
+    const totalAllLeads = await collection.countDocuments(accFilter);
     
     // Obtener total de leads activos (sin eliminados) para la respuesta
     const total = await collection.countDocuments(query);
@@ -748,9 +768,8 @@ export async function getKommoLeadsFromDb(
 
     const leads = await cursor.toArray();
 
-    // Remover campos internos antes de devolver
     const cleanLeads: KommoLead[] = leads.map(lead => {
-      const { _id, customerId, syncedAt, lastModifiedAt, ...cleanLead } = lead;
+      const { _id, customerId, kommoAccountIndex: _acc, syncedAt, lastModifiedAt, ...cleanLead } = lead;
       return cleanLead as KommoLead;
     });
 
@@ -766,21 +785,18 @@ export async function getKommoLeadsFromDb(
 }
 
 /**
- * Obtiene el timestamp de la última sincronización
+ * Obtiene el timestamp de la última sincronización (kommoAccountIndex 0-based).
  */
-export async function getLastSyncTime(customerId: string): Promise<Date | null> {
+export async function getLastSyncTime(customerId: string, kommoAccountIndex: number = 0): Promise<Date | null> {
   try {
     const db = await getMongoDb();
     const collection = db.collection<StoredKommoLead>('kommo_leads');
-
-    // Limpiar customerId para asegurar coincidencia exacta
     const cleanCustomerId = customerId.trim();
-
+    const accFilter = accountFilter(cleanCustomerId, kommoAccountIndex);
     const lastSync = await collection.findOne(
-      { customerId: cleanCustomerId },
+      accFilter,
       { sort: { syncedAt: -1 }, projection: { syncedAt: 1 } }
     );
-
     return lastSync?.syncedAt || null;
   } catch (error) {
     console.error('[KOMMO STORAGE] Error al obtener última sincronización:', error);
@@ -793,17 +809,17 @@ export async function getLastSyncTime(customerId: string): Promise<Date | null> 
  */
 export async function cleanupDeletedLeads(
   customerId: string,
-  olderThanDays: number = 30
+  olderThanDays: number = 30,
+  kommoAccountIndex: number = 0
 ): Promise<number> {
   try {
     const db = await getMongoDb();
     const collection = db.collection<StoredKommoLead>('kommo_leads');
-
+    const accFilter = accountFilter(customerId.trim(), kommoAccountIndex);
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - olderThanDays);
-
     const result = await collection.deleteMany({
-      customerId,
+      ...accFilter,
       is_deleted: true,
       syncedAt: { $lt: cutoffDate },
     });
