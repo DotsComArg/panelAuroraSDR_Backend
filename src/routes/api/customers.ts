@@ -267,10 +267,9 @@ router.get('/features', async (req: Request, res: Response) => {
       ? customer.enabledViews.filter(view => VALID_VIEWS.includes(view)) // Filtrar inválidos
       : getDefaultViews(customer.planContratado || 'Básico');
     
-    // Cantidad de cuentas Kommo (para mostrar Kommo 1, Kommo 2, ... en el sidebar)
-    const kommoAccountsCount = customer.kommoAccounts && Array.isArray(customer.kommoAccounts) && customer.kommoAccounts.length > 0
-      ? customer.kommoAccounts.length
-      : (customer.kommoCredentials?.accessToken ? 1 : 0);
+    // Cuenta 0 = kommoCredentials, cuentas 1+ = kommoAccounts
+    const hasFirstKommo = !!(customer.kommoCredentials?.accessToken);
+    const kommoAccountsCount = (hasFirstKommo ? 1 : 0) + ((customer.kommoAccounts && Array.isArray(customer.kommoAccounts)) ? customer.kommoAccounts.length : 0);
     
     console.log('[FEATURES] Vistas a devolver:', enabledViews, 'kommoAccountsCount:', kommoAccountsCount);
     

@@ -1464,7 +1464,8 @@ export function createKommoClient(credentials: KommoCredentials): KommoApiClient
 }
 
 /**
- * Obtiene la cantidad de cuentas Kommo configuradas para un cliente (1-based para UI: Kommo 1, Kommo 2, ...)
+ * Obtiene la cantidad de cuentas Kommo configuradas para un cliente (1-based para UI: Kommo 1, Kommo 2, ...).
+ * Cuenta 0 = kommoCredentials (si existe), cuentas 1, 2, ... = kommoAccounts[0], [1], ...
  */
 export async function getKommoAccountsCount(customerId: string): Promise<number> {
   try {
@@ -1475,18 +1476,17 @@ export async function getKommoAccountsCount(customerId: string): Promise<number>
       _id: new ObjectId(customerId)
     })
     if (!customer) return 0
-    if (customer.kommoAccounts && Array.isArray(customer.kommoAccounts) && customer.kommoAccounts.length > 0) {
-      return customer.kommoAccounts.length
-    }
-    if (customer.kommoCredentials?.accessToken) return 1
-    return 0
+    const hasFirst = !!(customer.kommoCredentials?.accessToken)
+    const extraCount = (customer.kommoAccounts && Array.isArray(customer.kommoAccounts)) ? customer.kommoAccounts.length : 0
+    return (hasFirst ? 1 : 0) + extraCount
   } catch {
     return 0
   }
 }
 
 /**
- * Obtiene las credenciales de Kommo de un cliente para la cuenta indicada (accountIndex 0-based) y las desencripta
+ * Obtiene las credenciales de Kommo para la cuenta indicada (accountIndex 0-based).
+ * Cuenta 0 = kommoCredentials (si existe), cuentas 1, 2, ... = kommoAccounts[0], [1], ...
  */
 export async function getKommoCredentialsForCustomer(customerId: string, accountIndex: number = 0): Promise<KommoCredentials | null> {
   try {
@@ -1503,12 +1503,17 @@ export async function getKommoCredentialsForCustomer(customerId: string, account
       return null
     }
     
-    let encrypted: { baseUrl?: string; accessToken: string; integrationId?: string; secretKey?: string } | null = null
+    const hasFirst = !!(customer.kommoCredentials?.accessToken)
+    const kommoAccounts = customer.kommoAccounts && Array.isArray(customer.kommoAccounts) ? customer.kommoAccounts : []
     
-    if (customer.kommoAccounts && Array.isArray(customer.kommoAccounts) && customer.kommoAccounts.length > accountIndex) {
-      encrypted = customer.kommoAccounts[accountIndex] as any
-    } else if (accountIndex === 0 && customer.kommoCredentials?.accessToken) {
-      encrypted = customer.kommoCredentials
+    let encrypted: { baseUrl?: string; accessToken: string; integrationId?: string; secretKey?: string } | null = null
+    if (accountIndex === 0 && hasFirst) {
+      encrypted = customer.kommoCredentials as any
+    } else if (kommoAccounts.length > 0) {
+      const indexInArray = hasFirst ? accountIndex - 1 : accountIndex
+      if (indexInArray >= 0 && indexInArray < kommoAccounts.length) {
+        encrypted = kommoAccounts[indexInArray] as any
+      }
     }
     
     if (!encrypted?.accessToken) {
