@@ -788,6 +788,17 @@ router.post('/kommo/leads/sync', async (req: Request, res: Response) => {
 router.post('/kommo/webhook', async (req: Request, res: Response) => {
   const webhookLogId = new Date().toISOString() + '_' + Math.random().toString(36).substr(2, 9);
   const startTime = Date.now();
+
+  // Log único y visible para Vercel: POST recibido + resumen del body
+  const leads = req.body?.leads;
+  const addCount = Array.isArray(leads?.add) ? leads.add.length : (leads?.add ? 1 : 0);
+  const updateCount = Array.isArray(leads?.update) ? leads.update.length : (leads?.update ? 1 : 0);
+  const deleteCount = Array.isArray(leads?.delete) ? leads.delete.length : (leads?.delete ? 1 : 0);
+  const accountIdFromBody = req.body?.account?.id ?? req.body?.account_id ?? req.body?.accountId ?? 'n/a';
+  console.log(
+    `[KOMMO WEBHOOK POST] id=${webhookLogId} accountId=${accountIdFromBody} leads_add=${addCount} leads_update=${updateCount} leads_delete=${deleteCount}`
+  );
+
   let customerId: string | null = null;
   let accountIndex = 0; // 0 = primera cuenta (kommoCredentials), 1+ = kommoAccounts
   let accountId: string | null | undefined = null;
@@ -795,37 +806,21 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
   let errorMessage: string | null = null;
   let processedLeads = 0;
   let deletedLeads = 0;
-  
+
   try {
     console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ==========================================`);
     console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Recibida petición de webhook`);
     console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Method: ${req.method}`);
     console.log(`[KOMMO WEBHOOK] [${webhookLogId}] URL: ${req.url}`);
-    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Headers keys:`, Object.keys(req.headers));
-    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Content-Type:`, req.headers['content-type']);
-    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body type:`, typeof req.body);
-    console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body is array:`, Array.isArray(req.body));
     console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body keys:`, req.body && typeof req.body === 'object' ? Object.keys(req.body) : 'N/A');
-    
-    // Log del body completo (limitado para no saturar logs)
-    try {
-      const bodyStr = JSON.stringify(req.body, null, 2);
-      if (bodyStr.length > 10000) {
-        console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body (primeros 10000 chars):`, bodyStr.substring(0, 10000));
-      } else {
-        console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body completo:`, bodyStr);
-      }
-    } catch (e) {
-      console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Body (no serializable):`, String(req.body).substring(0, 1000));
-    }
-    
+
     // Kommo envía los datos en el body
     const webhookData = req.body;
     
     // Kommo puede enviar diferentes tipos de webhooks
     // Estructura típica: { account: { id: ... }, leads: { add: [...], update: [...], delete: [...] } }
     if (!webhookData) {
-      console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] Body vacío o inválido`);
+      console.log(`[KOMMO WEBHOOK POST] id=${webhookLogId} body vacío o inválido -> 400`);
       // Guardar log del error antes de responder
       const duration = Date.now() - startTime;
       try {
@@ -1253,7 +1248,9 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     });
 
     // Responder rápidamente a Kommo (200 OK)
-    // Kommo espera una respuesta rápida, por eso procesamos en background si es necesario
+    console.log(
+      `[KOMMO WEBHOOK POST] id=${webhookLogId} OK customerId=${customerId} accountIndex=${accountIndex} processed=${processedLeads} deleted=${deletedLeads}`
+    );
     res.status(200).json({
       success: true,
       message: `Webhook procesado: ${processedLeads} leads actualizados, ${deletedLeads} eliminados`,
@@ -1262,10 +1259,12 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     });
 
   } catch (error: any) {
+    errorMessage = error.message || 'Error al procesar webhook';
+    console.log(
+      `[KOMMO WEBHOOK POST] id=${webhookLogId} ERROR ${errorMessage}`
+    );
     console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Error al procesar webhook:`, error);
     console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Stack:`, error.stack);
-    
-    errorMessage = error.message || 'Error al procesar webhook';
     success = false;
 
     // Guardar log del error
