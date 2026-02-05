@@ -789,6 +789,15 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
   const webhookLogId = new Date().toISOString() + '_' + Math.random().toString(36).substr(2, 9);
   const startTime = Date.now();
 
+  // En Vercel/serverless el body a veces llega como string; normalizar a objeto
+  if (typeof req.body === 'string' && req.body) {
+    try {
+      req.body = JSON.parse(req.body);
+    } catch {
+      req.body = null;
+    }
+  }
+
   // Log único y visible para Vercel: POST recibido + resumen del body
   const leads = req.body?.leads;
   const addCount = Array.isArray(leads?.add) ? leads.add.length : (leads?.add ? 1 : 0);
@@ -846,18 +855,15 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
       });
     }
 
-    // Extraer accountId del webhook
-    // Kommo puede enviarlo en diferentes lugares según el tipo de webhook
-    accountId = webhookData.account?.id || 
-                webhookData.account_id || 
-                webhookData.accountId ||
-                (req.headers['x-account-id'] as string) ||
-                null;
+    // Extraer accountId del webhook (Kommo puede enviar número o string)
+    const rawAccountId = webhookData.account?.id ??
+      webhookData.account_id ??
+      webhookData.accountId ??
+      (req.headers['x-account-id'] as string);
+    accountId = rawAccountId != null && rawAccountId !== '' ? String(rawAccountId) : null;
 
     if (!accountId) {
       console.warn('[KOMMO WEBHOOK] No se encontró accountId en el webhook');
-      // Intentar extraer de la URL base si está disponible
-      console.log('[KOMMO WEBHOOK] Intentando buscar customerId por otros métodos...');
     }
 
     // Buscar el customerId por accountId de Kommo o por URL base
@@ -867,33 +873,54 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     
     // Si tenemos accountId, buscar por él (método principal y más seguro)
     // Comprobar kommoCredentials (cuenta 0) y kommoAccounts (cuenta 1, 2, ...)
+    // Helper: verifica si baseUrl corresponde al accountId (subdominio o URL que contenga el id)
+    const baseUrlMatchesAccountId = (baseUrl: string | undefined, accId: string): boolean => {
+      if (!baseUrl) return false;
+      const subdomainMatch = baseUrl.match(/https?:\/\/([^./]+)/i);
+      const subdomain = subdomainMatch ? subdomainMatch[1] : '';
+      return subdomain === accId || baseUrl.includes(accId);
+    };
+
+    const storedAccountIdMatches = (stored: string | number | undefined, webhookAccId: string): boolean =>
+      stored != null && stored !== '' && String(stored).trim() === webhookAccId;
+
     if (accountId) {
       console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Buscando cliente por accountId: ${accountId}`);
       const accountIdStr = accountId.toString();
       for (const customer of customers) {
-        let accIdx = 0;
-        // Cuenta 0: kommoCredentials
-        if (customer.kommoCredentials?.baseUrl) {
-          const urlMatch = (customer.kommoCredentials.baseUrl || '').match(/https?:\/\/([^.]+)\.kommo\.com/i);
-          if (urlMatch && (urlMatch[1] === accountIdStr || urlMatch[1] === String(accountId))) {
-            customerId = customer._id.toString();
-            accountIndex = 0;
-            console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente identificado: ${customerId} (${customer.nombre || customer.email || 'Sin nombre'}) cuenta Kommo 1 (accountId: ${accountId})`);
-            break;
-          }
-          accIdx++;
+        // 1) Match por accountId guardado (prioridad: así distinguimos cuentas con mismo cliente, ej. Quijada Kommo 1 y 2)
+        if (storedAccountIdMatches((customer.kommoCredentials as any)?.accountId, accountIdStr)) {
+          customerId = customer._id.toString();
+          accountIndex = 0;
+          console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente por accountId guardado: ${customerId} (${customer.nombre || customer.email || 'Sin nombre'}) cuenta Kommo 1`);
+          break;
         }
-        // Cuentas 1, 2, ...: kommoAccounts
         const kommoAccounts = (customer as any).kommoAccounts;
+        if (kommoAccounts && Array.isArray(kommoAccounts)) {
+          for (let i = 0; i < kommoAccounts.length; i++) {
+            if (storedAccountIdMatches(kommoAccounts[i]?.accountId, accountIdStr)) {
+              customerId = customer._id.toString();
+              accountIndex = (customer.kommoCredentials?.baseUrl ? 1 : 0) + i;
+              console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente por accountId guardado: ${customerId} (${customer.nombre || customer.email || 'Sin nombre'}) cuenta Kommo ${accountIndex + 1}`);
+              break;
+            }
+          }
+        }
         if (customerId) break;
+        // 2) Fallback: match por baseUrl (subdominio o URL que contenga el id)
+        if (customer.kommoCredentials?.baseUrl && baseUrlMatchesAccountId(customer.kommoCredentials.baseUrl, accountIdStr)) {
+          customerId = customer._id.toString();
+          accountIndex = 0;
+          console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente por baseUrl: ${customerId} cuenta Kommo 1 (accountId: ${accountId})`);
+          break;
+        }
         if (kommoAccounts && Array.isArray(kommoAccounts)) {
           for (let i = 0; i < kommoAccounts.length; i++) {
             const baseUrl = kommoAccounts[i]?.baseUrl || '';
-            const urlMatch = baseUrl.match(/https?:\/\/([^.]+)\.kommo\.com/i);
-            if (urlMatch && (urlMatch[1] === accountIdStr || urlMatch[1] === String(accountId))) {
+            if (baseUrlMatchesAccountId(baseUrl, accountIdStr)) {
               customerId = customer._id.toString();
               accountIndex = (customer.kommoCredentials?.baseUrl ? 1 : 0) + i;
-              console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente identificado: ${customerId} (${customer.nombre || customer.email || 'Sin nombre'}) cuenta Kommo ${accountIndex + 1} (accountId: ${accountId})`);
+              console.log(`[KOMMO WEBHOOK] [${webhookLogId}] ✅ Cliente por baseUrl: ${customerId} cuenta Kommo ${accountIndex + 1}`);
               break;
             }
           }
@@ -901,7 +928,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
         if (customerId) break;
       }
       if (!customerId) {
-        console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ No se encontró cliente con accountId: ${accountId}`);
+        console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ accountId=${accountId} sin coincidencia. Agregá "Account ID" en Admin → Clientes → Kommo para esta cuenta (ej. 35875379).`);
       }
     } else {
       console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ No se recibió accountId en el webhook`);
@@ -921,38 +948,41 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
         console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ Usando fallback: cliente único encontrado: ${customerId} (${customersWithKommo[0].nombre || customersWithKommo[0].email || 'Sin nombre'})`);
         console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ NOTA: Este webhook no tenía accountId. Se recomienda configurar webhooks con accountId para múltiples cuentas.`);
       } else {
-        // Si hay múltiples clientes y no tenemos accountId, rechazar el webhook
-        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] ❌ ERROR: Hay ${customersWithKommo.length} clientes con credenciales de Kommo, pero el webhook no incluye accountId. No se puede determinar qué cuenta actualizar.`);
+        const reason = accountId
+          ? `accountId=${accountId} recibido pero ningún cliente tiene ese Account ID configurado. Agregá "Account ID (para webhooks)" en Admin → Clientes → Kommo para la cuenta correcta.`
+          : `hay ${customersWithKommo.length} clientes con Kommo pero el webhook no incluye accountId.`;
+        console.error(`[KOMMO WEBHOOK] [${webhookLogId}] ❌ ERROR: No se puede identificar la cuenta: ${reason}`);
         console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Clientes encontrados:`, customersWithKommo.map(c => ({
           id: c._id.toString(),
           nombre: c.nombre || c.email || 'Sin nombre',
           baseUrl: c.kommoCredentials?.baseUrl || 'Sin URL'
         })));
         
-        // Guardar log del error antes de responder
         const duration = Date.now() - startTime;
         try {
           await saveWebhookLog({
             logId: webhookLogId,
             customerId: 'unknown',
-            accountId: null,
+            accountId: accountId || null,
             success: false,
             processedLeads: 0,
             deletedLeads: 0,
             duration,
             headers: req.headers,
             body: webhookData,
-            error: `No se puede identificar la cuenta: hay ${customersWithKommo.length} clientes con Kommo pero el webhook no incluye accountId`,
+            error: `No se puede identificar la cuenta: ${reason}`,
             timestamp: new Date(),
           });
         } catch (logError) {
           console.error(`[KOMMO WEBHOOK] [${webhookLogId}] Error al guardar log:`, logError);
         }
         
-        // Responder 200 para que Kommo no reintente, pero loguear el error
+        const msg = accountId
+          ? `accountId=${accountId} recibido pero ningún cliente tiene ese Account ID. Agregá "Account ID (para webhooks)" en Admin → Clientes → Kommo para la cuenta correcta.`
+          : `Hay ${customersWithKommo.length} clientes con Kommo y el webhook no incluye accountId.`;
         return res.status(200).json({
           success: false,
-          message: `No se puede identificar la cuenta: hay ${customersWithKommo.length} clientes con Kommo pero el webhook no incluye accountId. Verifica la configuración del webhook en Kommo.`,
+          message: `No se puede identificar la cuenta: ${msg}`,
         });
       }
     }

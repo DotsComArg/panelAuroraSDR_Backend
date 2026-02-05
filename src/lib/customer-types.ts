@@ -34,6 +34,7 @@ export interface Customer {
   // Credenciales de Kommo encriptadas (una cuenta; se mantiene por compatibilidad)
   kommoCredentials?: {
     baseUrl: string; // URL base de Kommo (ej: https://dotscomagency.kommo.com)
+    accountId?: string; // ID de cuenta que envía Kommo en webhooks (ej: 35875379); si no coincide el subdominio
     accessToken: string; // Access token encriptado
     integrationId?: string; // ID de integración (opcional)
     secretKey?: string; // Secret key encriptado (opcional)
@@ -41,6 +42,7 @@ export interface Customer {
   // Múltiples cuentas Kommo por cliente (Kommo 1, Kommo 2, ...)
   kommoAccounts?: Array<{
     baseUrl: string;
+    accountId?: string; // ID de cuenta para webhooks
     accessToken: string;
     integrationId?: string;
     secretKey?: string;
@@ -82,12 +84,14 @@ export interface CreateCustomerDto {
   };
   kommoCredentials?: {
     baseUrl: string;
+    accountId?: string; // ID de cuenta Kommo para webhooks (ej: 35875379)
     accessToken: string; // Token sin encriptar (se encriptará al guardar)
     integrationId?: string;
     secretKey?: string; // Secret sin encriptar (se encriptará al guardar)
   };
   kommoAccounts?: Array<{
     baseUrl: string;
+    accountId?: string;
     accessToken: string;
     integrationId?: string;
     secretKey?: string;

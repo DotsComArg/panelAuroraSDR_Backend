@@ -689,6 +689,7 @@ router.post('/', async (req: Request, res: Response) => {
     if (body.kommoCredentials?.accessToken) {
       customerData.kommoCredentials = {
         baseUrl: body.kommoCredentials.baseUrl,
+        accountId: body.kommoCredentials.accountId ? String(body.kommoCredentials.accountId).trim() : undefined,
         accessToken: encrypt(body.kommoCredentials.accessToken),
         integrationId: body.kommoCredentials.integrationId,
         secretKey: body.kommoCredentials.secretKey ? encrypt(body.kommoCredentials.secretKey) : undefined,
@@ -699,6 +700,7 @@ router.post('/', async (req: Request, res: Response) => {
         .filter((acc: any) => acc?.accessToken)
         .map((acc: any) => ({
           baseUrl: acc.baseUrl || '',
+          accountId: acc.accountId ? String(acc.accountId).trim() : undefined,
           accessToken: encrypt(acc.accessToken),
           integrationId: acc.integrationId,
           secretKey: acc.secretKey ? encrypt(acc.secretKey) : undefined,
@@ -790,6 +792,7 @@ router.put('/:customerId', async (req: Request, res: Response) => {
     if (body.kommoCredentials) {
       updateData.kommoCredentials = {
         baseUrl: body.kommoCredentials.baseUrl,
+        accountId: body.kommoCredentials.accountId ? String(body.kommoCredentials.accountId).trim() : undefined,
         accessToken: encrypt(body.kommoCredentials.accessToken),
         integrationId: body.kommoCredentials.integrationId,
         secretKey: body.kommoCredentials.secretKey ? encrypt(body.kommoCredentials.secretKey) : undefined,
@@ -806,6 +809,7 @@ router.put('/:customerId', async (req: Request, res: Response) => {
           if (keepToken && !existingAcc?.accessToken) return [];
           return [{
             baseUrl: acc.baseUrl || (existingAcc?.baseUrl || ''),
+            accountId: acc.accountId != null && acc.accountId !== '' ? String(acc.accountId).trim() : (existingAcc as any)?.accountId,
             accessToken: keepToken && existingAcc?.accessToken ? existingAcc.accessToken : encrypt(acc.accessToken),
             integrationId: acc.integrationId ?? existingAcc?.integrationId,
             secretKey: keepSecret && existingAcc?.secretKey ? existingAcc.secretKey : (acc.secretKey && acc.secretKey !== '__KEEP__' ? encrypt(acc.secretKey) : undefined),
