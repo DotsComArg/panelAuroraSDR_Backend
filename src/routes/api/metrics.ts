@@ -447,19 +447,42 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     
     console.log(`[KOMMO API] Leads encontrados: ${leads.length}, total: ${total}, totalAll: ${totalAll}`);
 
-    // Si hay filtros activos, calcular y devolver estadísticas filtradas desde BD
+    // Si hay filtros activos, calcular y devolver estadísticas filtradas
+    // statsFromApi=true: obtener leads desde API Kommo (más lento pero coincide exactamente con Kommo)
+    // statsFromApi=false/omitido: usar leads de MongoDB (más rápido; puede diferir si BD está desactualizada)
     const hasFilters = !!(filters.dateFrom || filters.dateTo || filters.closedDateFrom || filters.closedDateTo ||
       filters.responsibleUserId || filters.pipelineId || filters.statusId || (filters.tagIds && filters.tagIds.length > 0));
+    const statsFromApi = getQueryParam(req.query.statsFromApi) === 'true';
     let stats: any = undefined;
     if (hasFilters) {
       try {
         const credentials = await getKommoCredentialsForCustomer(cleanCustomerId, accountIndex);
         if (credentials) {
-          const statsFilters = { ...filters, skip: 0, limit: 50000 };
-          const { leads: allFilteredLeads } = await getKommoLeadsFromDb(cleanCustomerId, statsFilters);
           const kommoClient = createKommoClient(credentials);
+          let allFilteredLeads: any[];
+
+          if (statsFromApi) {
+            // Fuente: API Kommo - garantiza coincidencia exacta con lo que muestra Kommo
+            const apiFilters: any = {};
+            if (filters.dateFrom) apiFilters.dateFrom = filters.dateFrom;
+            if (filters.dateTo) apiFilters.dateTo = filters.dateTo;
+            if (filters.closedDateFrom) apiFilters.closedDateFrom = filters.closedDateFrom;
+            if (filters.closedDateTo) apiFilters.closedDateTo = filters.closedDateTo;
+            if (filters.dateField) apiFilters.dateField = filters.dateField;
+            if (filters.responsibleUserId) apiFilters.responsibleUserId = filters.responsibleUserId;
+            if (filters.pipelineId) apiFilters.pipelineId = filters.pipelineId;
+            if (filters.statusId) apiFilters.statusId = filters.statusId;
+            if (filters.tagIds?.length) apiFilters.tagIds = filters.tagIds;
+            allFilteredLeads = await kommoClient.getLeadsWithFilters(apiFilters);
+            console.log(`[KOMMO API] Stats desde API Kommo: ${allFilteredLeads.length} leads`);
+          } else {
+            const statsFilters = { ...filters, skip: 0, limit: 50000 };
+            const result = await getKommoLeadsFromDb(cleanCustomerId, statsFilters);
+            allFilteredLeads = result.leads;
+          }
+
           stats = await kommoClient.getFilteredLeadsStats(allFilteredLeads);
-          console.log(`[KOMMO API] Stats filtradas calculadas: total=${stats?.totals?.total}, won=${stats?.totals?.won}, lost=${stats?.totals?.lost}`);
+          console.log(`[KOMMO API] Stats filtradas: total=${stats?.totals?.total}, won=${stats?.totals?.won}, lost=${stats?.totals?.lost}, active=${stats?.totals?.active} (fromApi=${statsFromApi})`);
         }
       } catch (statsErr: any) {
         console.warn('[KOMMO API] No se pudieron calcular stats filtradas:', statsErr?.message || statsErr);
@@ -540,7 +563,72 @@ router.get('/kommo/leads/sample', async (req: Request, res: Response) => {
   }
 });
 
+// Endpoint para sincronización por lotes - evita timeout en Vercel/serverless
+// El frontend debe llamar en bucle con page=1, 2, 3... hasta que hasMore=false
+router.post('/kommo/leads/sync-chunk', async (req: Request, res: Response) => {
+  try {
+    const customerId = getQueryParam(req.query.customerId || req.body?.customerId);
+    const pageParam = getQueryParam(req.query.page || req.body?.page) || '1';
+    const page = Math.max(1, parseInt(pageParam, 10) || 1);
+
+    if (!customerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'customerId es requerido',
+      });
+    }
+
+    const cleanCustomerId = customerId.trim();
+    const accountIndex = getAccountIndex(req.query.accountIndex ?? req.body?.accountIndex);
+
+    const credentials = await getKommoCredentialsForCustomer(cleanCustomerId, accountIndex);
+    if (!credentials) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cliente no encontrado o no tiene credenciales de Kommo configuradas',
+      });
+    }
+
+    const kommoClient = createKommoClient(credentials);
+    const { leads, hasMore } = await kommoClient.getLeadsSinglePage(page, {});
+
+    if (leads.length === 0 && page === 1) {
+      return res.json({
+        success: true,
+        page,
+        hasMore: false,
+        totalInPage: 0,
+        totalProcessed: 0,
+        message: 'No hay leads en Kommo para sincronizar',
+      });
+    }
+
+    const result = await syncKommoLeads(cleanCustomerId, leads, true, accountIndex);
+
+    return res.json({
+      success: true,
+      page,
+      hasMore,
+      totalInPage: leads.length,
+      totalProcessed: result.totalProcessed,
+      newLeads: result.newLeads,
+      updatedLeads: result.updatedLeads,
+      errors: result.errors,
+      message: hasMore
+        ? `Página ${page} sincronizada. Llamar nuevamente con page=${page + 1}`
+        : `Sincronización completada. ${result.totalProcessed} leads en esta página.`,
+    });
+  } catch (error: any) {
+    console.error('[KOMMO SYNC-CHUNK] Error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Error al sincronizar lote',
+    });
+  }
+});
+
 // Endpoint para sincronización inicial completa - trae TODOS los leads con TODOS sus campos
+// NOTA: En Vercel/serverless puede dar timeout con muchos leads. Usar /kommo/leads/sync-chunk en su lugar.
 router.post('/kommo/leads/full-sync', async (req: Request, res: Response) => {
   try {
     const customerId = getQueryParam(req.query.customerId || req.body?.customerId);

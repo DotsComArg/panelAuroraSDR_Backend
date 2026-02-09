@@ -519,6 +519,38 @@ class KommoApiClient {
   }
 
   /**
+   * Obtiene UNA sola página de leads (para sincronización por lotes sin timeout)
+   * @returns { leads, hasMore } - hasMore=true si hay más páginas
+   */
+  async getLeadsSinglePage(
+    page: number,
+    filters: KommoLeadsFilter = {}
+  ): Promise<{ leads: KommoLead[]; hasMore: boolean }> {
+    const baseParams: string[] = []
+    baseParams.push('limit=250')
+    baseParams.push('with=contacts,companies,tags')
+
+    const dateField = filters.dateField || 'created_at'
+    if (filters.dateFrom) baseParams.push(`filter[${dateField}][from]=${filters.dateFrom}`)
+    if (filters.dateTo) baseParams.push(`filter[${dateField}][to]=${filters.dateTo}`)
+    if (filters.closedDateFrom) baseParams.push(`filter[closed_at][from]=${filters.closedDateFrom}`)
+    if (filters.closedDateTo) baseParams.push(`filter[closed_at][to]=${filters.closedDateTo}`)
+    if (filters.responsibleUserId) baseParams.push(`filter[responsible_user_id][]=${filters.responsibleUserId}`)
+    if (filters.pipelineId) baseParams.push(`filter[pipeline_id][]=${filters.pipelineId}`)
+    if (filters.statusId) baseParams.push(`filter[status_id][]=${filters.statusId}`)
+    if (filters.tagIds?.length) {
+      filters.tagIds.forEach((tagId) => baseParams.push(`filter[tags][]=${tagId}`))
+    }
+
+    const queryString = [...baseParams, `page=${page}`].join('&')
+    const response: KommoLeadsResponse = await this.authenticatedRequest(`/leads?${queryString}`)
+    const leads = response._embedded?.leads || []
+    const hasMore = !!response._links?.next
+
+    return { leads, hasMore }
+  }
+
+  /**
    * Obtiene un lead por ID con todos sus campos (custom_fields_values completos, contactos, empresas).
    * Usado en sincronización completa para asegurar que traemos toda la data (fuente, UTM, etc.).
    */
