@@ -25,14 +25,23 @@ const getAccountIndex = (param: any): number => {
   return isNaN(n) || n < 0 ? 0 : n;
 };
 
-/** Convierte dateFrom/dateTo a timestamp Unix en segundos. Acepta "YYYY-MM-DD" o número. */
+/** Convierte dateFrom/dateTo a timestamp Unix en segundos. Acepta "YYYY-MM-DD", "dd/mm/yyyy", "dd-mm-yyyy" o número. */
 function parseDateToTimestamp(val: string | null | undefined, endOfDay = false): number | undefined {
   if (val === null || val === undefined || val === '') return undefined;
   const s = String(val).trim();
   if (!s) return undefined;
   // Si es solo dígitos, tratar como timestamp en segundos
   if (/^\d+$/.test(s)) return parseInt(s, 10);
-  const d = new Date(s);
+  let d = new Date(s);
+  // Si falla el parseo (ej. "03/02/2026" en locale US = 2 de marzo), intentar dd/mm/yyyy o dd-mm-yyyy
+  if (isNaN(d.getTime())) {
+    const dmys = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (dmys) {
+      const [, day, month, year] = dmys;
+      // month es 1-based en Date
+      d = new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
+    }
+  }
   if (isNaN(d.getTime())) return undefined;
   if (endOfDay) {
     d.setHours(23, 59, 59, 999);
@@ -398,20 +407,29 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     if (closedDateToParam) filters.closedDateTo = parseDateToTimestamp(closedDateToParam, true);
     if (dateField) filters.dateField = dateField;
 
-    // Filtros de usuario, pipeline, status
+    // Filtros de usuario, pipeline, status (validar para evitar NaN que rompe la query)
     const responsibleUserId = getQueryParam(req.query.responsibleUserId);
     const pipelineId = getQueryParam(req.query.pipelineId);
     const statusId = getQueryParam(req.query.statusId);
 
-    if (responsibleUserId) filters.responsibleUserId = parseInt(responsibleUserId, 10);
-    if (pipelineId) filters.pipelineId = parseInt(pipelineId, 10);
-    if (statusId) filters.statusId = parseInt(statusId, 10);
+    if (responsibleUserId) {
+      const n = parseInt(responsibleUserId, 10);
+      if (!isNaN(n)) filters.responsibleUserId = n;
+    }
+    if (pipelineId) {
+      const n = parseInt(pipelineId, 10);
+      if (!isNaN(n)) filters.pipelineId = n;
+    }
+    if (statusId) {
+      const n = parseInt(statusId, 10);
+      if (!isNaN(n)) filters.statusId = n;
+    }
 
-    // Filtros de etiquetas (puede ser múltiple)
+    // Filtros de etiquetas (puede ser múltiple); solo agregar IDs numéricos válidos
     const tagIds = req.query.tagIds;
     if (tagIds) {
       if (Array.isArray(tagIds)) {
-        filters.tagIds = tagIds.map(id => parseInt(String(id), 10));
+        filters.tagIds = tagIds.map(id => parseInt(String(id), 10)).filter(n => !isNaN(n));
       } else {
         const idsStr = String(tagIds).includes(',') ? String(tagIds).split(',') : [String(tagIds)];
         filters.tagIds = idsStr.map(id => parseInt(id.trim(), 10)).filter(n => !isNaN(n));
@@ -937,8 +955,12 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     // Si no encontramos por accountId, intentar identificar por otros métodos
     // IMPORTANTE: Solo usar fallback si hay UN SOLO cliente con credenciales de Kommo
     // Si hay múltiples, rechazar el webhook para evitar actualizar la cuenta incorrecta
+    // Incluir customers con kommoCredentials O kommoAccounts (ligar data por accountId)
+    const hasKommo = (c: any) =>
+      c.kommoCredentials?.accessToken ||
+      (c.kommoAccounts && Array.isArray(c.kommoAccounts) && c.kommoAccounts.some((a: any) => a?.accessToken));
     if (!customerId) {
-      const customersWithKommo = customers.filter(c => c.kommoCredentials);
+      const customersWithKommo = customers.filter(hasKommo);
       
       if (customersWithKommo.length === 0) {
         console.warn(`[KOMMO WEBHOOK] [${webhookLogId}] ⚠️ No hay clientes con credenciales de Kommo configuradas`);

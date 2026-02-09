@@ -158,6 +158,14 @@ interface KommoLeadsFilter {
   dateField?: 'created_at' | 'closed_at' // Campo de fecha a usar para filtrado
 }
 
+/** Respuesta del endpoint GET /api/v4/account de Kommo */
+export interface KommoAccountInfo {
+  id: number
+  name?: string
+  subdomain?: string
+  current_user?: number
+}
+
 interface KommoCredentials {
   baseUrl: string
   accessToken: string // Token desencriptado
@@ -378,6 +386,15 @@ class KommoApiClient {
       
       throw error
     }
+  }
+
+  /**
+   * Obtiene información de la cuenta actual desde Kommo (incluye account ID)
+   * Endpoint: GET /api/v4/account
+   */
+  async getAccountInfo(): Promise<KommoAccountInfo> {
+    const data = await this.authenticatedRequest<KommoAccountInfo>('/account')
+    return data
   }
 
   /**
@@ -1461,6 +1478,21 @@ export function createKommoClient(credentials: KommoCredentials): KommoApiClient
   const client = new KommoApiClient()
   client.setCredentials(credentials)
   return client
+}
+
+/**
+ * Obtiene el ID de cuenta de Kommo desde la API usando credenciales.
+ * Endpoint: GET /api/v4/account → retorna { id: number }
+ */
+export async function fetchKommoAccountIdFromApi(credentials: KommoCredentials): Promise<string | null> {
+  try {
+    const client = createKommoClient(credentials)
+    const info = await client.getAccountInfo()
+    return info?.id != null ? String(info.id) : null
+  } catch (error: any) {
+    console.error('[KOMMO] Error al obtener account ID:', error?.message || error)
+    return null
+  }
 }
 
 /**

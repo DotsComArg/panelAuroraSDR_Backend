@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { send2FACode, sendPasswordResetEmail, sendWelcomeEmail } from '../../lib/email-service.js';
 import { create2FASession, generateResetToken } from '../../lib/two-factor-utils.js';
+import { syncKommoAccountIds } from '../../lib/sync-kommo-account-ids.js';
 
 const router = Router();
 
@@ -123,6 +124,24 @@ router.post('/test-email/welcome', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: 'Error al enviar el email',
+    });
+  }
+});
+
+// Sincronizar IDs de cuentas Kommo desde la API y guardarlos en customers (para webhooks)
+router.post('/sync-kommo-account-ids', async (req: Request, res: Response) => {
+  try {
+    const result = await syncKommoAccountIds();
+    return res.json({
+      success: true,
+      message: `Sincronización completada: ${result.updated} actualizados, ${result.errors} errores`,
+      data: result,
+    });
+  } catch (error: any) {
+    console.error('Error al sincronizar account IDs Kommo:', error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || 'Error al sincronizar IDs de Kommo',
     });
   }
 });

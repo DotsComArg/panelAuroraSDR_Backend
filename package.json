@@ -9,7 +9,8 @@
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
     "migrate:features": "tsx scripts/migrate-features.ts",
-    "diagnose:customerid": "tsx scripts/diagnose-customerid.ts"
+    "diagnose:customerid": "tsx scripts/diagnose-customerid.ts",
+    "sync:kommo-account-ids": "tsx scripts/sync-kommo-account-ids.ts"
   },
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
