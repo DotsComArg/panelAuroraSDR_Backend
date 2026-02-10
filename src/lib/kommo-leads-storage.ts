@@ -770,6 +770,16 @@ export async function getKommoLeadsFromDb(
 
     const cleanLeads: KommoLead[] = leads.map(lead => {
       const { _id, customerId, kommoAccountIndex: _acc, syncedAt, lastModifiedAt, ...cleanLead } = lead;
+      // Normalizar pipeline_id y status_id a números (MongoDB puede devolver Double, string, etc.)
+      // Sin esto, Set.has(142) no coincide con lead.status_id="142" y las métricas won/lost fallan
+      if (cleanLead.pipeline_id != null && typeof cleanLead.pipeline_id !== 'number') {
+        const n = parseInt(String(cleanLead.pipeline_id), 10);
+        cleanLead.pipeline_id = !isNaN(n) ? n : cleanLead.pipeline_id as number;
+      }
+      if (cleanLead.status_id != null && typeof cleanLead.status_id !== 'number') {
+        const n = parseInt(String(cleanLead.status_id), 10);
+        cleanLead.status_id = !isNaN(n) ? n : cleanLead.status_id as number;
+      }
       return cleanLead as KommoLead;
     });
 

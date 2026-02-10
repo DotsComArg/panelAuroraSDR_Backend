@@ -158,6 +158,81 @@ interface KommoLeadsFilter {
   dateField?: 'created_at' | 'closed_at' // Campo de fecha a usar para filtrado
 }
 
+/**
+ * Clasifica statuses en won/lost por pipeline.
+ *
+ * PRIORIDAD (según documentación Kommo y best practices):
+ * 1) status.type - Fuente oficial de Kommo: 0=open, 1=won, 2=lost
+ * 2) Nombre de etapa - Fallback para pipelines custom ("CIERRE EXITOSO", "CIERRE PERDIDO")
+ * 3) Posición - Últimas etapas como fallback (última=lost, penúltima=won)
+ *
+ * Kommo usa status.type para identificar etapas de cierre; priorizarlo evita discrepancias.
+ */
+function buildWonLostByPipeline(pipelines: KommoPipeline[]): Map<number, { wonStatusIds: Set<number>; lostStatusIds: Set<number> }> {
+  const wonLostByPipeline = new Map<number, { wonStatusIds: Set<number>; lostStatusIds: Set<number> }>()
+
+  const nameSuggestsWon = (name: string): boolean => {
+    const n = name.toLowerCase().trim()
+    return (
+      n.includes('cierre exitoso') || n.includes('closed - won') || n.includes('closed won') ||
+      n.includes('closed-won') || n.includes('logrado') || n.includes('exito') || n.includes('éxito') ||
+      n.includes('ganado') || n.includes('venta cerrada') || n.includes('cerrado exitoso') ||
+      (n.includes('won') && !n.includes('lost'))
+    )
+  }
+
+  const nameSuggestsLost = (name: string): boolean => {
+    const n = name.toLowerCase().trim()
+    return (
+      n.includes('cierre perdido') || n.includes('closed - lost') || n.includes('closed lost') ||
+      n.includes('closed-lost') || n.includes('perdido') || n.includes('perdida') ||
+      n.includes('ventas perdido') || n.includes('no compró') || n.includes('no compro') ||
+      n.includes('cerrado perdido') || n.includes('venta perdida') ||
+      (n.includes('lost') && !n.includes('won'))
+    )
+  }
+
+  pipelines.forEach((pipeline) => {
+    const pipelineStatuses = pipeline._embedded?.statuses || []
+    if (pipelineStatuses.length === 0) return
+
+    const wonStatusIds = new Set<number>()
+    const lostStatusIds = new Set<number>()
+
+    const sortedStatuses = [...pipelineStatuses].sort((a, b) => a.sort - b.sort)
+
+    // PRIORIDAD 1: status.type - Fuente oficial de Kommo (0=open, 1=won, 2=lost)
+    sortedStatuses.forEach((status) => {
+      if (status.type === 1) wonStatusIds.add(status.id)
+      else if (status.type === 2) lostStatusIds.add(status.id)
+    })
+
+    // PRIORIDAD 2: Nombre de etapa - Para statuses con type=0 o indefinido
+    sortedStatuses.forEach((status) => {
+      if (wonStatusIds.has(status.id) || lostStatusIds.has(status.id)) return
+      const name = status.name || ''
+      if (nameSuggestsWon(name)) wonStatusIds.add(status.id)
+      else if (nameSuggestsLost(name)) lostStatusIds.add(status.id)
+    })
+
+    // PRIORIDAD 3: Posición - Últimas etapas como fallback (última=lost, penúltima=won)
+    const lastN = 3
+    const tailStatuses = sortedStatuses.slice(-lastN)
+    tailStatuses.forEach((status, idx) => {
+      if (wonStatusIds.has(status.id) || lostStatusIds.has(status.id)) return
+      if (idx === tailStatuses.length - 1) {
+        lostStatusIds.add(status.id)
+      } else if (idx === tailStatuses.length - 2) {
+        wonStatusIds.add(status.id)
+      }
+    })
+
+    wonLostByPipeline.set(pipeline.id, { wonStatusIds, lostStatusIds })
+  })
+
+  return wonLostByPipeline
+}
+
 /** Respuesta del endpoint GET /api/v4/account de Kommo */
 export interface KommoAccountInfo {
   id: number
@@ -890,151 +965,8 @@ class KommoApiClient {
     // IMPORTANTE: Algunos leads pueden tener is_deleted como null o undefined, tratarlos como activos
     const activeLeads = leads.filter((lead) => lead.is_deleted !== true)
 
-    // Identificar etapas ganadas y perdidas POR PIPELINE (no globalmente)
-    // Esto es crítico porque un status_id puede tener diferentes significados en diferentes pipelines
-    const wonLostByPipeline = new Map<number, { wonStatusIds: Set<number>, lostStatusIds: Set<number> }>()
-    
-    pipelines.forEach((pipeline) => {
-      const pipelineStatuses = pipeline._embedded?.statuses || []
-      if (pipelineStatuses.length === 0) return
-
-      const wonStatusIds = new Set<number>()
-      const lostStatusIds = new Set<number>()
-
-      // Ordenar statuses por sort (orden en el pipeline)
-      const sortedStatuses = [...pipelineStatuses].sort((a, b) => a.sort - b.sort)
-
-      // Identificar las últimas dos etapas primero
-      if (sortedStatuses.length >= 2) {
-        const lastStatus = sortedStatuses[sortedStatuses.length - 1]
-        const secondLastStatus = sortedStatuses[sortedStatuses.length - 2]
-        
-        // PRIMERO: Identificar por tipo (MÁS CONFIABLE)
-        if (lastStatus.type === 1) {
-          wonStatusIds.add(lastStatus.id)
-        } else if (lastStatus.type === 2) {
-          lostStatusIds.add(lastStatus.id)
-        }
-        
-        if (secondLastStatus.type === 1) {
-          wonStatusIds.add(secondLastStatus.id)
-        } else if (secondLastStatus.type === 2) {
-          lostStatusIds.add(secondLastStatus.id)
-        }
-        
-        // SEGUNDO: Si no tienen tipo definido, usar nombres y posición
-        if (!wonStatusIds.has(lastStatus.id) && !lostStatusIds.has(lastStatus.id)) {
-          const lastStatusNameLower = lastStatus.name.toLowerCase().trim()
-          
-          if (
-            lastStatusNameLower.includes('cierre exitoso') ||
-            lastStatusNameLower.includes('closed - won') ||
-            lastStatusNameLower.includes('closed won') ||
-            lastStatusNameLower.includes('closed-won') ||
-            lastStatusNameLower.includes('logrado') ||
-            lastStatusNameLower.includes('exito') ||
-            lastStatusNameLower.includes('éxito') ||
-            lastStatusNameLower.includes('ganado') ||
-            (lastStatusNameLower.includes('won') && !lastStatusNameLower.includes('lost'))
-          ) {
-            wonStatusIds.add(lastStatus.id)
-          } else if (
-            lastStatusNameLower.includes('cierre perdido') ||
-            lastStatusNameLower.includes('closed - lost') ||
-            lastStatusNameLower.includes('closed lost') ||
-            lastStatusNameLower.includes('closed-lost') ||
-            lastStatusNameLower.includes('perdido') ||
-            lastStatusNameLower.includes('perdida') ||
-            lastStatusNameLower.includes('ventas perdido') ||
-            (lastStatusNameLower.includes('lost') && !lastStatusNameLower.includes('won'))
-          ) {
-            lostStatusIds.add(lastStatus.id)
-          } else {
-            // Por defecto, la última etapa es PERDIDA
-            lostStatusIds.add(lastStatus.id)
-          }
-        }
-        
-        if (!wonStatusIds.has(secondLastStatus.id) && !lostStatusIds.has(secondLastStatus.id)) {
-          const secondLastStatusNameLower = secondLastStatus.name.toLowerCase().trim()
-          
-          if (
-            secondLastStatusNameLower.includes('cierre exitoso') ||
-            secondLastStatusNameLower.includes('closed - won') ||
-            secondLastStatusNameLower.includes('closed won') ||
-            secondLastStatusNameLower.includes('closed-won') ||
-            secondLastStatusNameLower.includes('logrado') ||
-            secondLastStatusNameLower.includes('exito') ||
-            secondLastStatusNameLower.includes('éxito') ||
-            secondLastStatusNameLower.includes('ganado') ||
-            (secondLastStatusNameLower.includes('won') && !secondLastStatusNameLower.includes('lost'))
-          ) {
-            wonStatusIds.add(secondLastStatus.id)
-          } else if (
-            secondLastStatusNameLower.includes('cierre perdido') ||
-            secondLastStatusNameLower.includes('closed - lost') ||
-            secondLastStatusNameLower.includes('closed lost') ||
-            secondLastStatusNameLower.includes('closed-lost') ||
-            secondLastStatusNameLower.includes('perdido') ||
-            secondLastStatusNameLower.includes('perdida') ||
-            secondLastStatusNameLower.includes('ventas perdido') ||
-            (secondLastStatusNameLower.includes('lost') && !secondLastStatusNameLower.includes('won'))
-          ) {
-            lostStatusIds.add(secondLastStatus.id)
-          } else {
-            // Por defecto, la penúltima etapa es GANADA
-            wonStatusIds.add(secondLastStatus.id)
-          }
-        }
-      }
-
-      // Identificar otros statuses por tipo (no solo las últimas dos)
-      sortedStatuses.forEach((status) => {
-        if (status.type === 1) {
-          wonStatusIds.add(status.id)
-        } else if (status.type === 2) {
-          lostStatusIds.add(status.id)
-        }
-      })
-
-      // Identificar otros statuses por nombre (para statuses que no son las últimas dos)
-      sortedStatuses.forEach((status) => {
-        const isLastTwo = sortedStatuses.length >= 2 && 
-          (status.id === sortedStatuses[sortedStatuses.length - 1].id || 
-           status.id === sortedStatuses[sortedStatuses.length - 2].id)
-        
-        if (!isLastTwo && !wonStatusIds.has(status.id) && !lostStatusIds.has(status.id)) {
-          const statusNameLower = status.name.toLowerCase().trim()
-          
-          if (
-            statusNameLower.includes('cierre exitoso') ||
-            statusNameLower.includes('closed - won') ||
-            statusNameLower.includes('closed won') ||
-            statusNameLower.includes('closed-won') ||
-            statusNameLower.includes('logrado') ||
-            statusNameLower.includes('exito') ||
-            statusNameLower.includes('éxito') ||
-            statusNameLower.includes('ganado') ||
-            statusNameLower.includes('won')
-          ) {
-            wonStatusIds.add(status.id)
-          } else if (
-            statusNameLower.includes('cierre perdido') ||
-            statusNameLower.includes('closed - lost') ||
-            statusNameLower.includes('closed lost') ||
-            statusNameLower.includes('closed-lost') ||
-            statusNameLower.includes('perdido') ||
-            statusNameLower.includes('perdida') ||
-            statusNameLower.includes('ventas perdido') ||
-            statusNameLower.includes('lost')
-          ) {
-            lostStatusIds.add(status.id)
-          }
-        }
-      })
-
-      wonLostByPipeline.set(pipeline.id, { wonStatusIds, lostStatusIds })
-    })
+    // Clasificación por etapa (posición) + nombre, type como apoyo
+    const wonLostByPipeline = buildWonLostByPipeline(pipelines)
 
     // Calcular totales usando la clasificación por pipeline
     // El TOTAL debe incluir TODOS los leads (incluyendo eliminados), no solo los activos
@@ -1261,161 +1193,29 @@ class KommoApiClient {
     // El TOTAL debe incluir TODOS los leads (incluyendo eliminados)
     const totalLeads = leads.length
 
-    // Identificar etapas ganadas y perdidas POR PIPELINE (no globalmente)
-    // Esto es crítico porque un status_id puede tener diferentes significados en diferentes pipelines
-    const wonLostByPipeline = new Map<number, { wonStatusIds: Set<number>, lostStatusIds: Set<number> }>()
-    
-    pipelines.forEach((pipeline) => {
-      const pipelineStatuses = pipeline._embedded?.statuses || []
-      if (pipelineStatuses.length === 0) return
-
-      const wonStatusIds = new Set<number>()
-      const lostStatusIds = new Set<number>()
-
-      // Ordenar statuses por sort (orden en el pipeline)
-      const sortedStatuses = [...pipelineStatuses].sort((a, b) => a.sort - b.sort)
-
-      // Identificar las últimas dos etapas primero
-      if (sortedStatuses.length >= 2) {
-        const lastStatus = sortedStatuses[sortedStatuses.length - 1]
-        const secondLastStatus = sortedStatuses[sortedStatuses.length - 2]
-        
-        // PRIMERO: Identificar por tipo (MÁS CONFIABLE)
-        if (lastStatus.type === 1) {
-          wonStatusIds.add(lastStatus.id)
-        } else if (lastStatus.type === 2) {
-          lostStatusIds.add(lastStatus.id)
-        }
-        
-        if (secondLastStatus.type === 1) {
-          wonStatusIds.add(secondLastStatus.id)
-        } else if (secondLastStatus.type === 2) {
-          lostStatusIds.add(secondLastStatus.id)
-        }
-        
-        // SEGUNDO: Si no tienen tipo definido, usar nombres y posición
-        if (!wonStatusIds.has(lastStatus.id) && !lostStatusIds.has(lastStatus.id)) {
-          const lastStatusNameLower = lastStatus.name.toLowerCase().trim()
-          
-          if (
-            lastStatusNameLower.includes('cierre exitoso') ||
-            lastStatusNameLower.includes('closed - won') ||
-            lastStatusNameLower.includes('closed won') ||
-            lastStatusNameLower.includes('closed-won') ||
-            lastStatusNameLower.includes('logrado') ||
-            lastStatusNameLower.includes('exito') ||
-            lastStatusNameLower.includes('éxito') ||
-            lastStatusNameLower.includes('ganado') ||
-            (lastStatusNameLower.includes('won') && !lastStatusNameLower.includes('lost'))
-          ) {
-            wonStatusIds.add(lastStatus.id)
-          } else if (
-            lastStatusNameLower.includes('cierre perdido') ||
-            lastStatusNameLower.includes('closed - lost') ||
-            lastStatusNameLower.includes('closed lost') ||
-            lastStatusNameLower.includes('closed-lost') ||
-            lastStatusNameLower.includes('perdido') ||
-            lastStatusNameLower.includes('perdida') ||
-            lastStatusNameLower.includes('ventas perdido') ||
-            (lastStatusNameLower.includes('lost') && !lastStatusNameLower.includes('won'))
-          ) {
-            lostStatusIds.add(lastStatus.id)
-          } else {
-            // Por defecto, la última etapa es PERDIDA
-            lostStatusIds.add(lastStatus.id)
-          }
-        }
-        
-        if (!wonStatusIds.has(secondLastStatus.id) && !lostStatusIds.has(secondLastStatus.id)) {
-          const secondLastStatusNameLower = secondLastStatus.name.toLowerCase().trim()
-          
-          if (
-            secondLastStatusNameLower.includes('cierre exitoso') ||
-            secondLastStatusNameLower.includes('closed - won') ||
-            secondLastStatusNameLower.includes('closed won') ||
-            secondLastStatusNameLower.includes('closed-won') ||
-            secondLastStatusNameLower.includes('logrado') ||
-            secondLastStatusNameLower.includes('exito') ||
-            secondLastStatusNameLower.includes('éxito') ||
-            secondLastStatusNameLower.includes('ganado') ||
-            (secondLastStatusNameLower.includes('won') && !secondLastStatusNameLower.includes('lost'))
-          ) {
-            wonStatusIds.add(secondLastStatus.id)
-          } else if (
-            secondLastStatusNameLower.includes('cierre perdido') ||
-            secondLastStatusNameLower.includes('closed - lost') ||
-            secondLastStatusNameLower.includes('closed lost') ||
-            secondLastStatusNameLower.includes('closed-lost') ||
-            secondLastStatusNameLower.includes('perdido') ||
-            secondLastStatusNameLower.includes('perdida') ||
-            secondLastStatusNameLower.includes('ventas perdido') ||
-            (secondLastStatusNameLower.includes('lost') && !secondLastStatusNameLower.includes('won'))
-          ) {
-            lostStatusIds.add(secondLastStatus.id)
-          } else {
-            // Por defecto, la penúltima etapa es GANADA
-            wonStatusIds.add(secondLastStatus.id)
-          }
-        }
-      }
-
-      // Identificar otros statuses por tipo (no solo las últimas dos)
-      sortedStatuses.forEach((status) => {
-        if (status.type === 1) {
-          wonStatusIds.add(status.id)
-        } else if (status.type === 2) {
-          lostStatusIds.add(status.id)
-        }
-      })
-
-      // Identificar otros statuses por nombre (para statuses que no son las últimas dos)
-      sortedStatuses.forEach((status) => {
-        const isLastTwo = sortedStatuses.length >= 2 && 
-          (status.id === sortedStatuses[sortedStatuses.length - 1].id || 
-           status.id === sortedStatuses[sortedStatuses.length - 2].id)
-        
-        if (!isLastTwo && !wonStatusIds.has(status.id) && !lostStatusIds.has(status.id)) {
-          const statusNameLower = status.name.toLowerCase().trim()
-          
-          if (
-            statusNameLower.includes('cierre exitoso') ||
-            statusNameLower.includes('closed - won') ||
-            statusNameLower.includes('closed won') ||
-            statusNameLower.includes('closed-won') ||
-            statusNameLower.includes('logrado') ||
-            statusNameLower.includes('exito') ||
-            statusNameLower.includes('éxito') ||
-            statusNameLower.includes('ganado') ||
-            statusNameLower.includes('won')
-          ) {
-            wonStatusIds.add(status.id)
-          } else if (
-            statusNameLower.includes('cierre perdido') ||
-            statusNameLower.includes('closed - lost') ||
-            statusNameLower.includes('closed lost') ||
-            statusNameLower.includes('closed-lost') ||
-            statusNameLower.includes('perdido') ||
-            statusNameLower.includes('perdida') ||
-            statusNameLower.includes('ventas perdido') ||
-            statusNameLower.includes('lost')
-          ) {
-            lostStatusIds.add(status.id)
-          }
-        }
-      })
-
-      wonLostByPipeline.set(pipeline.id, { wonStatusIds, lostStatusIds })
-    })
+    // Clasificación por etapa (posición) + nombre, type como apoyo
+    const wonLostByPipeline = buildWonLostByPipeline(pipelines)
 
     // Calcular totales usando la clasificación por pipeline
-    // totalLeads ya está definido arriba como leads.length (todos los leads, incluyendo eliminados)
+    // Normalizar pipeline_id y status_id a números (leads desde MongoDB pueden venir como string/Double)
+    const norm = (v: unknown): number | null => {
+      if (v == null) return null
+      const n = typeof v === 'number' ? (isNaN(v) ? null : v) : parseInt(String(v), 10)
+      return n != null && !isNaN(n) ? n : null
+    }
     const wonLeads = activeLeads.filter((lead) => {
-      const pipelineWonLost = wonLostByPipeline.get(lead.pipeline_id)
-      return pipelineWonLost?.wonStatusIds.has(lead.status_id) ?? false
+      const pid = norm(lead.pipeline_id)
+      const sid = norm(lead.status_id)
+      if (pid == null || sid == null) return false
+      const pipelineWonLost = wonLostByPipeline.get(pid)
+      return pipelineWonLost?.wonStatusIds.has(sid) ?? false
     })
     const lostLeads = activeLeads.filter((lead) => {
-      const pipelineWonLost = wonLostByPipeline.get(lead.pipeline_id)
-      return pipelineWonLost?.lostStatusIds.has(lead.status_id) ?? false
+      const pid = norm(lead.pipeline_id)
+      const sid = norm(lead.status_id)
+      if (pid == null || sid == null) return false
+      const pipelineWonLost = wonLostByPipeline.get(pid)
+      return pipelineWonLost?.lostStatusIds.has(sid) ?? false
     })
 
     // Distribución por pipeline y etapa
@@ -1438,21 +1238,25 @@ class KommoApiClient {
     > = {}
 
     activeLeads.forEach((lead) => {
-      const pipeline = pipelineMap.get(lead.pipeline_id)
-      const status = statusMap.get(lead.status_id)
+      const pid = norm(lead.pipeline_id)
+      const sid = norm(lead.status_id)
+      if (pid == null || sid == null) return
+
+      const pipeline = pipelineMap.get(pid)
+      const status = statusMap.get(sid)
 
       if (!pipeline || !status) return
 
       // Verificar que el status pertenece al pipeline del lead
-      const pipelineStatusIds = statusByPipeline.get(lead.pipeline_id)
-      if (!pipelineStatusIds || !pipelineStatusIds.has(lead.status_id)) {
+      const pipelineStatusIds = statusByPipeline.get(pid)
+      if (!pipelineStatusIds || !pipelineStatusIds.has(sid)) {
         // El status no pertenece a este pipeline, saltar este lead
         console.warn(`[KOMMO STATS] Lead ${lead.id} tiene status_id ${lead.status_id} que no pertenece al pipeline ${lead.pipeline_id}`)
         return
       }
 
-      if (!distributionByPipeline[lead.pipeline_id]) {
-        distributionByPipeline[lead.pipeline_id] = {
+      if (!distributionByPipeline[pid]) {
+        distributionByPipeline[pid] = {
           pipelineId: pipeline.id,
           pipelineName: pipeline.name,
           stages: {},
@@ -1460,17 +1264,17 @@ class KommoApiClient {
         }
       }
 
-      if (!distributionByPipeline[lead.pipeline_id].stages[lead.status_id]) {
+      if (!distributionByPipeline[pid].stages[sid]) {
         let stageType: 'open' | 'won' | 'lost' = 'open'
-        const pipelineWonLost = wonLostByPipeline.get(lead.pipeline_id)
+        const pipelineWonLost = wonLostByPipeline.get(pid)
         
-        if (pipelineWonLost?.wonStatusIds.has(status.id)) {
+        if (pipelineWonLost?.wonStatusIds.has(sid)) {
           stageType = 'won'
-        } else if (pipelineWonLost?.lostStatusIds.has(status.id)) {
+        } else if (pipelineWonLost?.lostStatusIds.has(sid)) {
           stageType = 'lost'
         }
 
-        distributionByPipeline[lead.pipeline_id].stages[lead.status_id] = {
+        distributionByPipeline[pid].stages[sid] = {
           statusId: status.id,
           statusName: status.name,
           count: 0,
@@ -1478,8 +1282,8 @@ class KommoApiClient {
         }
       }
 
-      distributionByPipeline[lead.pipeline_id].stages[lead.status_id].count++
-      distributionByPipeline[lead.pipeline_id].total++
+      distributionByPipeline[pid].stages[sid].count++
+      distributionByPipeline[pid].total++
     })
 
     // Convertir a array
