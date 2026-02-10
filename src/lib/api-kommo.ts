@@ -162,11 +162,13 @@ interface KommoLeadsFilter {
  * Clasifica statuses en won/lost por pipeline.
  *
  * PRIORIDAD (según documentación Kommo y best practices):
- * 1) status.type - Fuente oficial de Kommo: 0=open, 1=won, 2=lost
- * 2) Nombre de etapa - Fallback para pipelines custom ("CIERRE EXITOSO", "CIERRE PERDIDO")
- * 3) Posición - Últimas etapas como fallback (última=lost, penúltima=won)
+ * 1) status.type - Fuente oficial de Kommo: 0=open, 1=won, 2=lost.
+ *    Las dos etapas por defecto de Kommo son "Cierre exitoso" (type=1) y "Cierre perdido" (type=2).
+ * 2) Nombre de etapa - Fallback para pipelines custom ("CIERRE EXITOSO", "CIERRE PERDIDO").
+ * 3) Posición - Últimas etapas como fallback (última=lost, penúltima=won).
  *
- * Kommo usa status.type para identificar etapas de cierre; priorizarlo evita discrepancias.
+ * Los clientes suelen usar más el nombre de la etapa que el status 0/1/2; listamos por etapa
+ * (statusName) en el panel y usamos type para clasificar ganado/perdido.
  */
 function buildWonLostByPipeline(pipelines: KommoPipeline[]): Map<number, { wonStatusIds: Set<number>; lostStatusIds: Set<number> }> {
   const wonLostByPipeline = new Map<number, { wonStatusIds: Set<number>; lostStatusIds: Set<number> }>()

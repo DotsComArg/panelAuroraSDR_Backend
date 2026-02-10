@@ -148,13 +148,11 @@ router.get('/kommo', async (req: Request, res: Response) => {
       if (dbLeads.length > 0 && totalAll > 0) {
         const kommoClient = createKommoClient(credentials);
         const stats = await kommoClient.getFilteredLeadsStats(dbLeads);
-        
-        // Asegurar que el total incluya todos los leads (incluyendo eliminados si están en BD)
-        // Si totalAll es mayor que el total calculado, usar totalAll
-        if (totalAll > stats.totals.total) {
-          stats.totals.total = totalAll;
+        // Totals: total = leads activos (no eliminados), won/lost/active según etapa (Cierre exitoso / Cierre perdido por type o nombre).
+        // No mezclar con totalAll (incluye eliminados) para evitar métricas infladas.
+        if (stats.totals && typeof stats.totals === 'object') {
+          (stats as any).totalsIncludingDeleted = totalAll;
         }
-        
         return res.json({
           success: true,
           data: stats,
@@ -165,19 +163,11 @@ router.get('/kommo', async (req: Request, res: Response) => {
         return res.json({
           success: true,
           data: {
-            totals: {
-              total: 0,
-              won: 0,
-              lost: 0,
-              active: 0,
-            },
-            pipelines: [],
-            users: [],
-            tags: [],
-            conversionRate: 0,
-            lossRate: 0,
+            totals: { total: 0, won: 0, lost: 0, active: 0 },
+            distribution: [],
+            lastUpdated: new Date().toISOString(),
           },
-          needsSync: true, // Indicar que necesita sincronización
+          needsSync: true,
         });
       }
     }
@@ -335,6 +325,7 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     console.log(`[KOMMO API] Obteniendo leads para customerId: ${cleanCustomerId}, accountIndex: ${accountIndex}, refresh: ${refresh}, sync: ${sync}`);
 
     let apiLeads: any[] = [];
+    let apiFilters: any = {};
     if (refresh) {
       console.log(`[KOMMO API] Obteniendo leads desde API de Kommo para customerId: ${cleanCustomerId}, accountIndex: ${accountIndex}...`);
       
@@ -347,12 +338,46 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
       }
 
       const kommoClient = createKommoClient(credentials);
-      
-      // Obtener todos los leads desde la API
-      apiLeads = await kommoClient.getLeadsWithFilters({});
-      
+      // Construir filtros para la API desde query params (mismos que para BD)
+      apiFilters = {};
+      const dateFromParam = getQueryParam(req.query.dateFrom);
+      const dateToParam = getQueryParam(req.query.dateTo);
+      const closedDateFromParam = getQueryParam(req.query.closedDateFrom);
+      const closedDateToParam = getQueryParam(req.query.closedDateTo);
+      const dateFieldParam = getQueryParam(req.query.dateField) as 'created_at' | 'closed_at' | undefined;
+      if (dateFromParam) apiFilters.dateFrom = parseDateToTimestamp(dateFromParam, false);
+      if (dateToParam) apiFilters.dateTo = parseDateToTimestamp(dateToParam, true);
+      if (closedDateFromParam) apiFilters.closedDateFrom = parseDateToTimestamp(closedDateFromParam, false);
+      if (closedDateToParam) apiFilters.closedDateTo = parseDateToTimestamp(closedDateToParam, true);
+      if (dateFieldParam) apiFilters.dateField = dateFieldParam;
+      const responsibleUserId = getQueryParam(req.query.responsibleUserId);
+      const pipelineId = getQueryParam(req.query.pipelineId);
+      const statusId = getQueryParam(req.query.statusId);
+      if (responsibleUserId) {
+        const n = parseInt(responsibleUserId, 10);
+        if (!isNaN(n)) apiFilters.responsibleUserId = n;
+      }
+      if (pipelineId) {
+        const n = parseInt(pipelineId, 10);
+        if (!isNaN(n)) apiFilters.pipelineId = n;
+      }
+      if (statusId) {
+        const n = parseInt(statusId, 10);
+        if (!isNaN(n)) apiFilters.statusId = n;
+      }
+      const tagIds = req.query.tagIds;
+      if (tagIds) {
+        if (Array.isArray(tagIds)) {
+          apiFilters.tagIds = tagIds.map((id: any) => parseInt(String(id), 10)).filter((n: number) => !isNaN(n));
+        } else {
+          const idsStr = String(tagIds).includes(',') ? String(tagIds).split(',') : [String(tagIds)];
+          apiFilters.tagIds = idsStr.map((id: string) => parseInt(id.trim(), 10)).filter((n: number) => !isNaN(n));
+        }
+      }
+
+      apiLeads = await kommoClient.getLeadsWithFilters(apiFilters);
       console.log(`[KOMMO API] Leads obtenidos desde API: ${apiLeads.length}`);
-      
+
       if (sync) {
         console.log(`[KOMMO API] Sincronizando leads a BD para customerId: ${cleanCustomerId}, accountIndex: ${accountIndex}...`);
         await syncKommoLeads(cleanCustomerId, apiLeads, true, accountIndex);
@@ -362,32 +387,37 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
       }
     }
 
-    // Si se obtuvo desde API (refresh=true), devolver esos leads directamente
-    if (refresh && apiLeads.length > 0) {
-      // Si no se especifica paginación o se solicita explícitamente todos, devolver todos los leads
+    // Si se solicitó refresh, devolver respuesta desde API (aunque apiLeads esté vacío)
+    if (refresh) {
       const page = parseInt(getQueryParam(req.query.page) || '1', 10);
       const limitParam = getQueryParam(req.query.limit);
-      const limit = limitParam ? parseInt(limitParam, 10) : apiLeads.length; // Si no hay limit, devolver todos
-      
-      // Si el limit es mayor o igual al total, devolver todos
-      const paginatedLeads = limit >= apiLeads.length 
-        ? apiLeads 
-        : apiLeads.slice((page - 1) * limit, page * limit);
-      
-      console.log(`[KOMMO API] Devolviendo ${paginatedLeads.length} de ${apiLeads.length} leads desde API`);
-      
-      return res.json({
-        success: true,
-        data: { 
-          leads: paginatedLeads,
-          total: apiLeads.length,
-          page,
-          limit,
-          totalPages: Math.ceil(apiLeads.length / limit),
-          lastSync: null,
-          needsSync: false,
-        },
-      });
+      const limit = limitParam ? parseInt(limitParam, 10) : 50;
+      const total = apiLeads.length;
+      const paginatedLeads = total === 0 ? [] : apiLeads.slice((page - 1) * limit, page * limit);
+      const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
+      let payload: any = {
+        leads: paginatedLeads,
+        total,
+        page,
+        limit,
+        totalPages,
+        lastSync: null,
+        needsSync: false,
+      };
+      const hasFilters = !!(apiFilters.dateFrom !== undefined || apiFilters.dateTo !== undefined || apiFilters.closedDateFrom !== undefined || apiFilters.closedDateTo !== undefined || apiFilters.responsibleUserId !== undefined || apiFilters.pipelineId !== undefined || apiFilters.statusId !== undefined || (apiFilters.tagIds && apiFilters.tagIds.length > 0));
+      if (hasFilters && apiLeads.length > 0) {
+        try {
+          const creds = await getKommoCredentialsForCustomer(cleanCustomerId, accountIndex);
+          if (creds) {
+            const stats = await createKommoClient(creds).getFilteredLeadsStats(apiLeads);
+            payload.stats = stats;
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+      console.log(`[KOMMO API] Devolviendo ${paginatedLeads.length} de ${total} leads desde API (página ${page})`);
+      return res.json({ success: true, data: payload });
     }
 
     // Si no se solicitó refresh, obtener desde BD (más rápido)
@@ -1284,10 +1314,10 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
           continue;
         }
 
-        // Obtener el lead completo desde la API de Kommo
+        // Obtener el lead completo desde la API de Kommo (contacts, companies, tags = mismos campos que listado y sync)
         console.log(`[KOMMO WEBHOOK] [${webhookLogId}] Obteniendo lead ${leadId} desde API de Kommo...`);
         const leadResponse: any = await kommoClient.authenticatedRequest(
-          `/leads/${leadId}?with=contacts,companies`
+          `/leads/${leadId}?with=contacts,companies,tags`
         );
         
         if (leadResponse && leadResponse._embedded && leadResponse._embedded.leads) {
@@ -1362,7 +1392,7 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
     
     deletedLeads = leadsDeleted;
     if (success === undefined || success === null) {
-      success = true; // Solo establecer a true si no hubo error en sync
+      success = !errorMessage;
     }
 
     // Guardar log del webhook
@@ -1372,15 +1402,15 @@ router.post('/kommo/webhook', async (req: Request, res: Response) => {
       customerId: customerId!,
       accountId: accountId,
       accountIndex,
-      success: true,
+      success: !!success,
       processedLeads,
       deletedLeads,
       duration,
       headers: req.headers,
       body: webhookData,
       response: {
-        success: true,
-        message: `Webhook procesado: ${processedLeads} leads actualizados, ${deletedLeads} eliminados`,
+        success: !!success,
+        message: errorMessage || `Webhook procesado: ${processedLeads} leads actualizados, ${deletedLeads} eliminados`,
         processed: processedLeads,
         deleted: deletedLeads,
       },
