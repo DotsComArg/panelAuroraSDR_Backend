@@ -391,7 +391,7 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     if (refresh) {
       const page = parseInt(getQueryParam(req.query.page) || '1', 10);
       const limitParam = getQueryParam(req.query.limit);
-      const limit = limitParam ? parseInt(limitParam, 10) : 50;
+      const limit = limitParam ? Math.min(2000, Math.max(1, parseInt(limitParam, 10))) : 200;
       const total = apiLeads.length;
       const paginatedLeads = total === 0 ? [] : apiLeads.slice((page - 1) * limit, page * limit);
       const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
@@ -466,9 +466,9 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
       }
     }
 
-    // Paginación
+    // Paginación (por defecto 200 para ver más leads sin recargar)
     const page = parseInt(getQueryParam(req.query.page) || '1', 10);
-    const limit = parseInt(getQueryParam(req.query.limit) || '50', 10);
+    const limit = Math.min(2000, Math.max(1, parseInt(getQueryParam(req.query.limit) || '200', 10)));
     filters.skip = (page - 1) * limit;
     filters.limit = limit;
     filters.kommoAccountIndex = accountIndex;
