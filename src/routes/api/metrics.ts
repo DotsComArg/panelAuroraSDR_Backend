@@ -25,30 +25,38 @@ const getAccountIndex = (param: any): number => {
   return isNaN(n) || n < 0 ? 0 : n;
 };
 
-/** Convierte dateFrom/dateTo a timestamp Unix en segundos. Acepta "YYYY-MM-DD", "dd/mm/yyyy", "dd-mm-yyyy" o número. */
+/** Convierte dateFrom/dateTo a timestamp Unix en segundos (UTC). Acepta "YYYY-MM-DD", "dd/mm/yyyy", "dd-mm-yyyy" o número.
+ * Usa UTC para que el mismo rango de fechas coincida con la API de Kommo independientemente del timezone del servidor. */
 function parseDateToTimestamp(val: string | null | undefined, endOfDay = false): number | undefined {
   if (val === null || val === undefined || val === '') return undefined;
   const s = String(val).trim();
   if (!s) return undefined;
-  // Si es solo dígitos, tratar como timestamp en segundos
   if (/^\d+$/.test(s)) return parseInt(s, 10);
-  let d = new Date(s);
-  // Si falla el parseo (ej. "03/02/2026" en locale US = 2 de marzo), intentar dd/mm/yyyy o dd-mm-yyyy
-  if (isNaN(d.getTime())) {
-    const dmys = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-    if (dmys) {
-      const [, day, month, year] = dmys;
-      // month es 1-based en Date
-      d = new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
-    }
-  }
-  if (isNaN(d.getTime())) return undefined;
-  if (endOfDay) {
-    d.setHours(23, 59, 59, 999);
+  let year: number, month: number, day: number;
+  const iso = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  const dmys = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (iso) {
+    [, year, month, day] = iso.map(Number);
+    month -= 1;
+  } else if (dmys) {
+    const [, d, m, y] = dmys;
+    day = parseInt(d, 10);
+    month = parseInt(m, 10) - 1;
+    year = parseInt(y, 10);
   } else {
-    d.setHours(0, 0, 0, 0);
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return undefined;
+    if (endOfDay) {
+      d.setUTCHours(23, 59, 59, 999);
+    } else {
+      d.setUTCHours(0, 0, 0, 0);
+    }
+    return Math.floor(d.getTime() / 1000);
   }
-  return Math.floor(d.getTime() / 1000);
+  if (endOfDay) {
+    return Math.floor(Date.UTC(year, month, day, 23, 59, 59, 999) / 1000);
+  }
+  return Math.floor(Date.UTC(year, month, day, 0, 0, 0, 0) / 1000);
 }
 
 // Obtener métricas generales del dashboard
@@ -478,11 +486,10 @@ router.get('/kommo/leads', async (req: Request, res: Response) => {
     console.log(`[KOMMO API] Leads encontrados: ${leads.length}, total: ${total}, totalAll: ${totalAll}`);
 
     // Si hay filtros activos, calcular y devolver estadísticas filtradas
-    // statsFromApi=true: obtener leads desde API Kommo (más lento pero coincide exactamente con Kommo)
-    // statsFromApi=false/omitido: usar leads de MongoDB (más rápido; puede diferir si BD está desactualizada)
+    // Por defecto usar API de Kommo cuando hay filtros para que las cifras coincidan con Kommo (la BD puede estar desactualizada o tener otro alcance)
     const hasFilters = !!(filters.dateFrom || filters.dateTo || filters.closedDateFrom || filters.closedDateTo ||
       filters.responsibleUserId || filters.pipelineId || filters.statusId || (filters.tagIds && filters.tagIds.length > 0));
-    const statsFromApi = getQueryParam(req.query.statsFromApi) === 'true';
+    const statsFromApi = hasFilters ? (getQueryParam(req.query.statsFromApi) !== 'false') : false;
     let stats: any = undefined;
     if (hasFilters) {
       try {
