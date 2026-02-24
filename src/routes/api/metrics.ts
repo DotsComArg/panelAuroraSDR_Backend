@@ -178,6 +178,7 @@ router.post('/agent-activity', async (req: Request, res: Response) => {
       const text = String(content).toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
       const LOCATION_MENTIONS: { key: string; city: string; country: string }[] = [
         { key: 'santa cruz', city: 'Santa Cruz', country: 'Argentina' },
+        { key: 'salta', city: 'Salta', country: 'Argentina' },
         { key: 'buenos aires', city: 'Buenos Aires', country: 'Argentina' },
         { key: 'cordoba', city: 'Córdoba', country: 'Argentina' },
         { key: 'córdoba', city: 'Córdoba', country: 'Argentina' },
@@ -385,8 +386,8 @@ router.get('/agent-activity-stats', async (req: Request, res: Response) => {
     const tasaExito = outcomeEvents.length > 0 ? Math.round((successCount / outcomeEvents.length) * 100) : 0;
     const totalOutcomes = outcomeEvents.length;
 
-    // Tiempos de respuesta: por chatId, ordenar por timestamp. Para IA: usar responseTimeMs del evento ai_response si existe; si no, diferencia de timestamps pero solo si <= 90s (evitar outliers por timestamps incorrectos).
-    const MAX_AI_DELTA_MS = 90 * 1000; // 90 segundos: si la diferencia es mayor, asumimos timestamp mal y no la contamos
+    // Tiempos de respuesta: por chatId, ordenar por timestamp. Para IA: usar responseTimeMs del evento ai_response si existe; si no, diferencia de timestamps pero solo si <= 15s (descartar outliers por timestamps incorrectos; la IA suele responder en segundos).
+    const MAX_AI_DELTA_MS = 15 * 1000; // 15 segundos: si la diferencia es mayor, no la contamos (timestamps suelen estar mal)
     const byChat = new Map<string, { type: string; ts: Date; responseTimeMs?: number }[]>();
     for (const e of events as any[]) {
       const cid = e.chatId || e._id?.toString() || 'unknown';
