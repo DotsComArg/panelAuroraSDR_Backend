@@ -4,9 +4,11 @@ import { ObjectId } from 'mongodb';
 export type ViewFeature = 
   | 'dashboard' 
   | 'agentes' 
+  | 'metricasIA' // Métricas de actividad IA (éxito, tiempos, preguntas)
   | 'ubicaciones' 
   | 'analiticas' 
   | 'kommo'
+  | 'hubspot' // Integración HubSpot
   | 'equipo' 
   | 'configuracion' 
   | 'consultas' // Vista específica para HubsAutos (consultas de vehículos)

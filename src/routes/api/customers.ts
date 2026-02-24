@@ -19,9 +19,11 @@ const getParamAsString = (param: string | string[] | undefined): string | null =
 const VALID_VIEWS: ViewFeature[] = [
   'dashboard',
   'agentes',
+  'metricasIA',
   'ubicaciones',
   'analiticas',
   'kommo',
+  'hubspot',
   'equipo',
   'configuracion',
   'consultas',
@@ -278,6 +280,7 @@ router.get('/features', async (req: Request, res: Response) => {
       data: {
         enabledViews: enabledViews,
         kommoAccountsCount,
+        planContratado: customer.planContratado || 'Básico',
       },
     });
   } catch (error) {
