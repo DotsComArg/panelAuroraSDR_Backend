@@ -170,6 +170,39 @@ router.post('/agent-activity', async (req: Request, res: Response) => {
     const source = typeof body.source === 'string' ? body.source.trim() : undefined;
     const workflowId = typeof body.workflowId === 'string' ? body.workflowId.trim() : undefined;
     const workflowName = typeof body.workflowName === 'string' ? body.workflowName.trim() : undefined;
+    const responseTimeMs = body.responseTimeMs != null ? Math.max(0, Math.round(Number(body.responseTimeMs))) : undefined;
+
+    // Enriquecer ubicación desde el contenido si no vino en el body (ej. "Soy de Santa Cruz" -> city: Santa Cruz, country: Argentina)
+    let finalLocation = location;
+    if (!finalLocation && type === 'user_message' && content) {
+      const text = String(content).toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+      const LOCATION_MENTIONS: { key: string; city: string; country: string }[] = [
+        { key: 'santa cruz', city: 'Santa Cruz', country: 'Argentina' },
+        { key: 'buenos aires', city: 'Buenos Aires', country: 'Argentina' },
+        { key: 'cordoba', city: 'Córdoba', country: 'Argentina' },
+        { key: 'córdoba', city: 'Córdoba', country: 'Argentina' },
+        { key: 'rosario', city: 'Rosario', country: 'Argentina' },
+        { key: 'mendoza', city: 'Mendoza', country: 'Argentina' },
+        { key: 'tucuman', city: 'Tucumán', country: 'Argentina' },
+        { key: 'la plata', city: 'La Plata', country: 'Argentina' },
+        { key: 'mar del plata', city: 'Mar del Plata', country: 'Argentina' },
+        { key: 'argentina', city: '', country: 'Argentina' },
+        { key: 'méxico', city: '', country: 'México' },
+        { key: 'mexico', city: '', country: 'México' },
+        { key: 'colombia', city: '', country: 'Colombia' },
+        { key: 'chile', city: '', country: 'Chile' },
+        { key: 'perú', city: '', country: 'Perú' },
+        { key: 'peru', city: '', country: 'Perú' },
+        { key: 'españa', city: '', country: 'España' },
+        { key: 'espana', city: '', country: 'España' },
+      ];
+      for (const { key, city, country } of LOCATION_MENTIONS) {
+        if (text.includes(key)) {
+          finalLocation = { city: city || undefined, country };
+          break;
+        }
+      }
+    }
 
     const doc = {
       customerId,
@@ -181,10 +214,11 @@ router.post('/agent-activity', async (req: Request, res: Response) => {
       chatId,
       messageId,
       timestamp,
-      location: location && (location.country || location.city) ? location : undefined,
+      location: finalLocation && (finalLocation.country || finalLocation.city) ? finalLocation : undefined,
       source: source || undefined,
       workflowId: workflowId || undefined,
       workflowName: workflowName || undefined,
+      ...(type === 'ai_response' && responseTimeMs != null && { responseTimeMs }),
       createdAt: new Date(),
     };
 
@@ -236,6 +270,187 @@ router.get('/agent-activity', async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Error al obtener actividad del agente',
+    });
+  }
+});
+
+/** GET agent-activity-stats: métricas agregadas a partir de agent_activity (para apartado Métricas IA). */
+router.get('/agent-activity-stats', async (req: Request, res: Response) => {
+  try {
+    const customerId = getQueryParam(req.query.customerId);
+    const daysParam = getQueryParam(req.query.days);
+    const days = daysParam ? Math.max(1, parseInt(daysParam, 10)) : 30;
+
+    const db = await getMongoDb();
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const filter: any = { timestamp: { $gte: since } };
+    if (customerId && customerId !== 'all') {
+      const cid = customerId.trim();
+      if (cid === 'aurora-chat-ia') filter.source = 'web-chat';
+      else filter.customerId = cid;
+    }
+
+    const events = await db
+      .collection(AGENT_ACTIVITY_COLLECTION)
+      .find(filter)
+      .sort({ timestamp: 1 })
+      .project({ customerId: 1, type: 1, content: 1, outcome: 1, chatId: 1, timestamp: 1, location: 1, source: 1, responseTimeMs: 1 })
+      .toArray();
+
+    // Ubicaciones: contar por país y ciudad
+    const locationCounts: { country?: string; city?: string; count: number }[] = [];
+    const locationKeyCount = new Map<string, number>();
+    for (const e of events as any[]) {
+      const loc = e.location;
+      if (loc && (loc.country || loc.city)) {
+        const key = [loc.country || '', loc.city || ''].join('|');
+        locationKeyCount.set(key, (locationKeyCount.get(key) || 0) + 1);
+      }
+    }
+    locationKeyCount.forEach((count, key) => {
+      const [country, city] = key.split('|');
+      locationCounts.push({ country: country || undefined, city: city || undefined, count });
+    });
+    locationCounts.sort((a, b) => b.count - a.count);
+
+    // Qué pregunta más / qué le interesa: extraer palabras clave de mensajes de usuario para métricas
+    const userMessages = (events as any[]).filter((e) => e.type === 'user_message' && e.content && String(e.content).trim());
+    const normalize = (s: string) => String(s).toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+
+    // Palabras clave de interés (qué preguntan / qué les interesa). Se cuenta en cuántos mensajes aparece cada una.
+    const KEYWORDS_INTERES: { key: string; label: string }[] = [
+      { key: 'crm', label: 'CRM' },
+      { key: 'venta', label: 'Ventas' },
+      { key: 'marketing', label: 'Marketing' },
+      { key: 'integracion', label: 'Integración' },
+      { key: 'tecnologia', label: 'Tecnología' },
+      { key: 'precio', label: 'Precio' },
+      { key: 'demo', label: 'Demo' },
+      { key: 'automatiz', label: 'Automatización' },
+      { key: 'lead', label: 'Leads' },
+      { key: 'whatsapp', label: 'WhatsApp' },
+      { key: 'redes', label: 'Redes sociales' },
+      { key: 'atencion', label: 'Atención al cliente' },
+      { key: 'bot', label: 'Bot / IA' },
+      { key: 'consultoria', label: 'Consultoría' },
+      { key: 'soporte', label: 'Soporte' },
+    ];
+    const keywordCount = new Map<string, number>();
+    KEYWORDS_INTERES.forEach(({ key }) => keywordCount.set(key, 0));
+    userMessages.forEach((e) => {
+      const text = normalize(String(e.content));
+      KEYWORDS_INTERES.forEach(({ key, label }) => {
+        if (text.includes(key)) keywordCount.set(key, (keywordCount.get(key) || 0) + 1);
+      });
+    });
+    const topKeywords = Array.from(keywordCount.entries())
+      .map(([key, count]) => {
+        const item = KEYWORDS_INTERES.find((k) => k.key === key)!;
+        return { name: item.label, count };
+      })
+      .filter((x) => x.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 15);
+
+    // Productos/soluciones Aurora: mapeo de nombre de producto a palabras clave. Cada mensaje suma 1 por producto si contiene alguna keyword.
+    const PRODUCTOS_AURORA: { name: string; keywords: string[] }[] = [
+      { name: 'Integración con CRM', keywords: ['crm', 'integrar', 'integracion', 'integraciones', 'kommo', 'hubspot'] },
+      { name: 'Marketing', keywords: ['marketing', 'publicidad', 'campaña', 'campañas', 'ads', 'redes', 'meta', 'facebook', 'instagram'] },
+      { name: 'Ventas', keywords: ['venta', 'ventas', 'vender', 'cierre', 'embudo', 'lead'] },
+      { name: 'Automatización', keywords: ['automatiz', 'bot', 'flujo', 'ia', 'chatbot'] },
+      { name: 'Atención al cliente', keywords: ['atencion', 'cliente', 'soporte', 'whatsapp', 'canales'] },
+      { name: 'Consultoría', keywords: ['consultoria', 'asesor', 'implementacion'] },
+      { name: 'Demo / Cotización', keywords: ['demo', 'precio', 'costo', 'cotiz', 'presupuesto'] },
+    ];
+    const productCount = new Map<string, number>();
+    PRODUCTOS_AURORA.forEach((p) => productCount.set(p.name, 0));
+    userMessages.forEach((e) => {
+      const text = normalize(String(e.content));
+      PRODUCTOS_AURORA.forEach((p) => {
+        const match = p.keywords.some((k) => text.includes(k));
+        if (match) productCount.set(p.name, (productCount.get(p.name) || 0) + 1);
+      });
+    });
+    const topProductos = Array.from(productCount.entries())
+      .map(([name, count]) => ({ name, count }))
+      .filter((x) => x.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    // Tasa de éxito: eventos type=outcome; considerar éxito outcome in ['contact_closed','doubt_resolved','lead_captured','converted']
+    const outcomeEvents = (events as any[]).filter((e) => e.type === 'outcome');
+    const successOutcomes = new Set(['contact_closed', 'doubt_resolved', 'lead_captured', 'converted', 'closed', 'resolved']);
+    const successCount = outcomeEvents.filter((e) => e.outcome && successOutcomes.has(String(e.outcome).toLowerCase().trim())).length;
+    const tasaExito = outcomeEvents.length > 0 ? Math.round((successCount / outcomeEvents.length) * 100) : 0;
+    const totalOutcomes = outcomeEvents.length;
+
+    // Tiempos de respuesta: por chatId, ordenar por timestamp. Para IA: usar responseTimeMs del evento ai_response si existe; si no, diferencia de timestamps pero solo si <= 90s (evitar outliers por timestamps incorrectos).
+    const MAX_AI_DELTA_MS = 90 * 1000; // 90 segundos: si la diferencia es mayor, asumimos timestamp mal y no la contamos
+    const byChat = new Map<string, { type: string; ts: Date; responseTimeMs?: number }[]>();
+    for (const e of events as any[]) {
+      const cid = e.chatId || e._id?.toString() || 'unknown';
+      if (!byChat.has(cid)) byChat.set(cid, []);
+      const responseTimeMs = e.type === 'ai_response' && e.responseTimeMs != null ? Math.max(0, Number(e.responseTimeMs)) : undefined;
+      byChat.get(cid)!.push({
+        type: e.type,
+        ts: e.timestamp instanceof Date ? e.timestamp : new Date(e.timestamp),
+        ...(responseTimeMs != null && { responseTimeMs }),
+      });
+    }
+    let sumAiMs = 0;
+    let countAi = 0;
+    let sumClientMs = 0;
+    let countClient = 0;
+    byChat.forEach((arr) => {
+      arr.sort((a, b) => a.ts.getTime() - b.ts.getTime());
+      for (let i = 0; i < arr.length - 1; i++) {
+        if (arr[i].type === 'user_message' && arr[i + 1].type === 'ai_response') {
+          const aiEvent = arr[i + 1];
+          if (aiEvent.responseTimeMs != null) {
+            sumAiMs += aiEvent.responseTimeMs;
+            countAi++;
+          } else {
+            const deltaMs = aiEvent.ts.getTime() - arr[i].ts.getTime();
+            if (deltaMs >= 0 && deltaMs <= MAX_AI_DELTA_MS) {
+              sumAiMs += deltaMs;
+              countAi++;
+            }
+          }
+        }
+        if (arr[i].type === 'ai_response' && arr[i + 1].type === 'user_message') {
+          const deltaMs = arr[i + 1].ts.getTime() - arr[i].ts.getTime();
+          if (deltaMs >= 0 && deltaMs <= 300 * 1000) {
+            sumClientMs += deltaMs;
+            countClient++;
+          }
+        }
+      }
+    });
+    const avgResponseTimeAiSec = countAi > 0 ? Math.round(sumAiMs / countAi / 1000) : 0;
+    const avgResponseTimeClientSec = countClient > 0 ? Math.round(sumClientMs / countClient / 1000) : 0;
+
+    return res.json({
+      success: true,
+      data: {
+        totalEventos: events.length,
+        ubicaciones: locationCounts.slice(0, 20),
+        topKeywords,
+        topProductos,
+        tasaExito,
+        totalOutcomes,
+        successCount,
+        avgResponseTimeAiSec,
+        avgResponseTimeClientSec,
+        countConversacionesAi: countAi,
+        countConversacionesClient: countClient,
+      },
+    });
+  } catch (error: any) {
+    console.error('[agent-activity-stats] Error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Error al obtener métricas de actividad IA',
     });
   }
 });
