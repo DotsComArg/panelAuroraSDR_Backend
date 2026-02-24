@@ -675,6 +675,7 @@ router.post('/', async (req: Request, res: Response) => {
       email: body.email.toLowerCase().trim(),
       telefono: body.telefono || '',
       pais: body.pais || '',
+      ciudad: body.ciudad?.trim() || undefined,
       cantidadAgentes: body.cantidadAgentes || 0,
       planContratado: body.planContratado || 'Básico',
       fechaInicio: new Date(body.fechaInicio || Date.now()),
@@ -781,6 +782,7 @@ router.put('/:customerId', async (req: Request, res: Response) => {
     if (body.email) updateData.email = body.email.toLowerCase().trim();
     if (body.telefono !== undefined) updateData.telefono = body.telefono;
     if (body.pais !== undefined) updateData.pais = body.pais;
+    if (body.ciudad !== undefined) updateData.ciudad = body.ciudad?.trim() || undefined;
     if (body.cantidadAgentes !== undefined) updateData.cantidadAgentes = body.cantidadAgentes;
     if (body.planContratado) updateData.planContratado = body.planContratado;
     if (body.fechaInicio) updateData.fechaInicio = new Date(body.fechaInicio);

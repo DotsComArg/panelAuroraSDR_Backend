@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { getMongoDb } from '../../lib/mongodb.js';
 import { send2FACode, sendPasswordResetEmail, sendWelcomeEmail } from '../../lib/email-service.js';
 import { create2FASession, generateResetToken } from '../../lib/two-factor-utils.js';
 import { syncKommoAccountIds } from '../../lib/sync-kommo-account-ids.js';
@@ -31,6 +32,41 @@ const requireSuperAdmin = async (req: Request, res: Response, next: Function) =>
 
 // Aplicar middleware a todas las rutas
 router.use(requireSuperAdmin);
+
+// GET /api/admin/dashboard — estadísticas agregadas para el panel de admin (usuarios, clientes, Kommo, OpenAI)
+router.get('/dashboard', async (req: Request, res: Response) => {
+  try {
+    const db = await getMongoDb();
+    const users = await db.collection('users').find({}).toArray();
+    const customers = await db.collection('customers').find({}).toArray();
+
+    const totalUsers = users.length;
+    const superAdmins = users.filter((u: { role?: string }) => u.role === 'SuperAdmin').length;
+    const clients = users.filter((u: { role?: string }) => u.role === 'Cliente').length;
+
+    const totalCustomers = customers.length;
+    const customersWithKommo = customers.filter((c: { kommoCredentials?: { accessToken?: string }; kommoAccounts?: unknown[] }) =>
+      !!(c.kommoCredentials?.accessToken) || (Array.isArray(c.kommoAccounts) && c.kommoAccounts.length > 0)
+    ).length;
+    const customersWithOpenAI = customers.filter((c: { openAICredentials?: { apiKey?: string } }) =>
+      !!(c.openAICredentials?.apiKey)
+    ).length;
+
+    return res.json({
+      success: true,
+      data: {
+        users: { total: totalUsers, superAdmins, clients },
+        customers: { total: totalCustomers, withKommo: customersWithKommo, withOpenAI: customersWithOpenAI },
+      },
+    });
+  } catch (error: unknown) {
+    console.error('Error en GET /api/admin/dashboard:', error);
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Error al obtener estadísticas del dashboard',
+    });
+  }
+});
 
 // Probar email de recuperación de contraseña
 router.post('/test-email/passwordReset', async (req: Request, res: Response) => {

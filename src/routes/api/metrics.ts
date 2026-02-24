@@ -116,6 +116,118 @@ router.get('/locations', async (req: Request, res: Response) => {
   }
 });
 
+// ==================== ACTIVIDAD AGENTES IA (n8n → Aurora) ====================
+// Los flujos n8n con IA envían eventos aquí para métricas: respuesta exitosa, conversión,
+// palabra más mencionada, consulta más demandada, ubicación (para el mapa), etc.
+
+const AGENT_ACTIVITY_COLLECTION = 'agent_activity';
+
+/** Resuelve customerId desde body.customerId o body.accountSubdomain (Kommo). */
+async function resolveCustomerId(db: any, body: any): Promise<string | null> {
+  const customerId = typeof body.customerId === 'string' ? body.customerId.trim() : null;
+  if (customerId) return customerId;
+  const subdomain = typeof body.accountSubdomain === 'string' ? body.accountSubdomain.trim().toLowerCase() : null;
+  if (!subdomain) return null;
+  const customer = await db.collection('customers').findOne({
+    $or: [
+      { 'kommoCredentials.baseUrl': new RegExp(subdomain, 'i') },
+      { 'kommoAccounts.baseUrl': new RegExp(subdomain, 'i') },
+    ],
+  });
+  return customer ? String(customer._id) : null;
+}
+
+router.post('/agent-activity', async (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const db = await getMongoDb();
+
+    const customerId = await resolveCustomerId(db, body);
+    if (!customerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Falta customerId o accountSubdomain (subdominio Kommo) para identificar al cliente.',
+      });
+    }
+
+    const type = body.type === 'user_message' || body.type === 'ai_response' || body.type === 'outcome'
+      ? body.type
+      : 'user_message';
+    const content = typeof body.content === 'string' ? body.content.trim() : '';
+    const outcome = typeof body.outcome === 'string' ? body.outcome.trim() : undefined;
+    const leadId = body.leadId != null ? String(body.leadId) : undefined;
+    const contactId = body.contactId != null ? String(body.contactId) : undefined;
+    const chatId = body.chatId != null ? String(body.chatId) : undefined;
+    const messageId = body.messageId != null ? String(body.messageId) : undefined;
+    const timestamp = body.timestamp ? new Date(body.timestamp) : new Date();
+    const location =
+      body.location && typeof body.location === 'object'
+        ? {
+            country: typeof body.location.country === 'string' ? body.location.country.trim() || undefined : undefined,
+            city: typeof body.location.city === 'string' ? body.location.city.trim() || undefined : undefined,
+          }
+        : undefined;
+    const source = typeof body.source === 'string' ? body.source.trim() : undefined;
+
+    const doc = {
+      customerId,
+      type,
+      content,
+      outcome: outcome || undefined,
+      leadId,
+      contactId,
+      chatId,
+      messageId,
+      timestamp,
+      location: location && (location.country || location.city) ? location : undefined,
+      source: source || undefined,
+      createdAt: new Date(),
+    };
+
+    const result = await db.collection(AGENT_ACTIVITY_COLLECTION).insertOne(doc);
+
+    return res.status(201).json({ success: true, id: result.insertedId });
+  } catch (error: any) {
+    console.error('[agent-activity] Error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Error al registrar actividad del agente',
+    });
+  }
+});
+
+/** GET agent-activity: lista eventos de agentes IA para métricas y mapa (requiere customerId o devuelve vacío). */
+router.get('/agent-activity', async (req: Request, res: Response) => {
+  try {
+    const customerId = getQueryParam(req.query.customerId);
+    const daysParam = getQueryParam(req.query.days);
+    const days = daysParam ? Math.max(1, parseInt(daysParam, 10)) : 30;
+    const limit = Math.min(1000, Math.max(1, parseInt(getQueryParam(req.query.limit) || '500', 10)));
+
+    const db = await getMongoDb();
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const filter: any = { timestamp: { $gte: since } };
+    if (customerId && customerId !== 'all') filter.customerId = customerId.trim();
+
+    const events = await db
+      .collection(AGENT_ACTIVITY_COLLECTION)
+      .find(filter)
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .project({ customerId: 1, type: 1, content: 1, outcome: 1, leadId: 1, chatId: 1, timestamp: 1, location: 1, source: 1 })
+      .toArray();
+
+    return res.json({ success: true, data: events });
+  } catch (error: any) {
+    console.error('[agent-activity GET] Error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Error al obtener actividad del agente',
+    });
+  }
+});
+
 // ==================== RUTAS DE KOMMO ====================
 
 // Obtener estadísticas generales de Kommo

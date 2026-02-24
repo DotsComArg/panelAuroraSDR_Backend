@@ -20,6 +20,7 @@ export interface Customer {
   email: string;
   telefono: string;
   pais: string;
+  ciudad?: string;
   cantidadAgentes: number;
   planContratado: 'Básico' | 'Profesional' | 'Enterprise' | 'Custom';
   fechaInicio: Date;
@@ -73,6 +74,7 @@ export interface CreateCustomerDto {
   email: string;
   telefono: string;
   pais: string;
+  ciudad?: string;
   cantidadAgentes: number;
   planContratado: 'Básico' | 'Profesional' | 'Enterprise' | 'Custom';
   fechaInicio: string; // ISO string

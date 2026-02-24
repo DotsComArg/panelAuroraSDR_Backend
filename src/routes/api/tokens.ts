@@ -10,6 +10,7 @@ import {
   getOpenAICredentialsForCustomer,
   getOpenAIUsage,
   getOpenAIUsageFromDB,
+  getOpenAIUsageFromDBAll,
 } from '../../lib/api-openai.js';
 
 const router = Router();
@@ -194,15 +195,13 @@ function mapDbUsageToFrontend(
 }
 
 // GET /api/tokens/openai-usage?customerId=...&startDate=...&endDate=...
+// Sin customerId o customerId=all: devuelve uso agregado de todas las cuentas (solo desde BD).
 router.get('/openai-usage', async (req: Request, res: Response) => {
   try {
-    const customerId = getParam('customerId', req);
+    const customerIdRaw = getParam('customerId', req);
+    const customerId = customerIdRaw?.trim() || null;
     const startParam = getParam('startDate', req);
     const endParam = getParam('endDate', req);
-
-    if (!customerId) {
-      return res.status(400).json({ success: false, error: 'customerId es requerido' });
-    }
 
     const end = endParam ? new Date(endParam) : new Date();
     const start = startParam ? new Date(startParam) : (() => {
@@ -210,6 +209,20 @@ router.get('/openai-usage', async (req: Request, res: Response) => {
       d.setDate(d.getDate() - 30);
       return d;
     })();
+
+    // Todas las cuentas: agregar desde BD
+    if (!customerId || customerId === 'all') {
+      const fromDb = await getOpenAIUsageFromDBAll(start, end);
+      if (fromDb.length > 0) {
+        const payload = mapDbUsageToFrontend(fromDb, start, end);
+        return res.json({ success: true, data: payload });
+      }
+      return res.status(200).json({
+        success: true,
+        data: null,
+        message: 'No hay datos de uso para el rango de fechas. Usa /api/tokens/track para registrar llamadas por cliente.',
+      });
+    }
 
     const credentials = await getOpenAICredentialsForCustomer(customerId);
     if (!credentials) {
@@ -247,18 +260,45 @@ router.get('/openai-usage', async (req: Request, res: Response) => {
 });
 
 // GET /api/tokens/stats?customerId=...&period=daily|weekly|monthly
+// Sin customerId o customerId=all: devuelve estadísticas agregadas de todas las cuentas (solo desde BD).
 router.get('/stats', async (req: Request, res: Response) => {
   try {
-    const customerId = getParam('customerId', req);
+    const customerIdRaw = getParam('customerId', req);
+    const customerId = customerIdRaw?.trim() || null;
     const period = (getParam('period', req) || 'monthly') as 'daily' | 'weekly' | 'monthly';
 
-    if (!customerId) {
-      return res.status(400).json({ success: false, error: 'customerId es requerido' });
+    const { start, end } = parsePeriodDates(period);
+
+    // Todas las cuentas: agregar desde BD
+    if (!customerId || customerId === 'all') {
+      const fromDb = await getOpenAIUsageFromDBAll(start, end);
+      const payload = fromDb.length > 0 ? mapDbUsageToFrontend(fromDb, start, end) : null;
+      const avgTokens = payload && payload.totals.requests > 0
+        ? payload.totals.tokens / payload.totals.requests
+        : 0;
+      return res.json({
+        success: true,
+        data: {
+          period,
+          startDate: start.toISOString().split('T')[0],
+          endDate: end.toISOString().split('T')[0],
+          totalTokens: payload?.totals.tokens ?? 0,
+          totalRequests: payload?.totals.requests ?? 0,
+          avgTokensPerRequest: avgTokens,
+          totalCost: payload?.totals.cost ?? 0,
+          models: payload?.models.map((m) => m.model) ?? [],
+          dailyBreakdown: payload?.dailyUsage.map((d) => ({
+            date: d.date,
+            tokens: d.tokens,
+            requests: d.requests,
+            cost: d.cost,
+          })) ?? [],
+          modelBreakdown: payload?.models ?? [],
+        },
+      });
     }
 
-    const { start, end } = parsePeriodDates(period);
     const credentials = await getOpenAICredentialsForCustomer(customerId);
-
     let payload: ReturnType<typeof buildUsageResponse> | null = null;
 
     if (credentials) {

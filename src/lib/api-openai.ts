@@ -604,6 +604,72 @@ export async function getOpenAIUsageFromDB(
 }
 
 /**
+ * Obtiene estadísticas de uso de OpenAI desde la BD agregadas para TODAS las cuentas (admin).
+ */
+export async function getOpenAIUsageFromDBAll(
+  startDate: Date,
+  endDate: Date
+): Promise<OpenAITokenUsage[]> {
+  try {
+    const { getMongoDb } = await import('./mongodb.js')
+    const db = await getMongoDb()
+
+    const usage = await db
+      .collection('tokenUsage')
+      .find({
+        date: {
+          $gte: startDate,
+          $lte: endDate,
+        },
+      })
+      .sort({ date: 1 })
+      .toArray()
+
+    const groupedByDate: Record<string, OpenAITokenUsage> = {}
+
+    for (const record of usage) {
+      const dateStr = record.date instanceof Date
+        ? record.date.toISOString().split('T')[0]
+        : new Date(record.date).toISOString().split('T')[0]
+
+      if (!groupedByDate[dateStr]) {
+        groupedByDate[dateStr] = {
+          date: dateStr,
+          tokens: 0,
+          requests: 0,
+          cost: 0,
+          models: {},
+        }
+      }
+
+      groupedByDate[dateStr].tokens += record.tokensUsed || 0
+      groupedByDate[dateStr].requests += 1
+
+      const model = record.model?.trim() || 'Sin especificar'
+      if (!groupedByDate[dateStr].models[model]) {
+        groupedByDate[dateStr].models[model] = {
+          tokens: 0,
+          requests: 0,
+          cost: 0,
+        }
+      }
+
+      groupedByDate[dateStr].models[model].tokens += record.tokensUsed || 0
+      groupedByDate[dateStr].models[model].requests += 1
+
+      const costPer1KTokens = getCostPer1KTokens(model)
+      groupedByDate[dateStr].models[model].cost += (record.tokensUsed || 0) / 1000 * costPer1KTokens
+      groupedByDate[dateStr].cost += (record.tokensUsed || 0) / 1000 * costPer1KTokens
+    }
+
+    return Object.values(groupedByDate)
+  } catch (error) {
+    console.error('[OPENAI] Error al obtener uso agregado desde BD:', error)
+    return []
+  }
+}
+
+/**
  * Obtiene el costo por 1K tokens según el modelo
  * Precios aproximados de OpenAI (actualizados a 2024)
  */
