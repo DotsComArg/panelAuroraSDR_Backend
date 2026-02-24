@@ -6,6 +6,20 @@ import { syncKommoAccountIds } from '../../lib/sync-kommo-account-ids.js';
 
 const router = Router();
 
+/** Documento de usuario en MongoDB (campos usados en el dashboard admin). */
+interface UserDoc {
+  _id?: unknown;
+  role?: string;
+}
+
+/** Documento de cliente en MongoDB (campos usados en el dashboard admin). */
+interface CustomerDoc {
+  _id?: unknown;
+  kommoCredentials?: { accessToken?: string };
+  kommoAccounts?: unknown[];
+  openAICredentials?: { apiKey?: string };
+}
+
 // Middleware para verificar que el usuario es SuperAdmin
 const requireSuperAdmin = async (req: Request, res: Response, next: Function) => {
   try {
@@ -37,18 +51,18 @@ router.use(requireSuperAdmin);
 router.get('/dashboard', async (req: Request, res: Response) => {
   try {
     const db = await getMongoDb();
-    const users = await db.collection('users').find({}).toArray();
-    const customers = await db.collection('customers').find({}).toArray();
+    const users = await db.collection<UserDoc>('users').find({}).toArray();
+    const customers = await db.collection<CustomerDoc>('customers').find({}).toArray();
 
     const totalUsers = users.length;
-    const superAdmins = users.filter((u: { role?: string }) => u.role === 'SuperAdmin').length;
-    const clients = users.filter((u: { role?: string }) => u.role === 'Cliente').length;
+    const superAdmins = users.filter((u) => u.role === 'SuperAdmin').length;
+    const clients = users.filter((u) => u.role === 'Cliente').length;
 
     const totalCustomers = customers.length;
-    const customersWithKommo = customers.filter((c: { kommoCredentials?: { accessToken?: string }; kommoAccounts?: unknown[] }) =>
+    const customersWithKommo = customers.filter((c) =>
       !!(c.kommoCredentials?.accessToken) || (Array.isArray(c.kommoAccounts) && c.kommoAccounts.length > 0)
     ).length;
-    const customersWithOpenAI = customers.filter((c: { openAICredentials?: { apiKey?: string } }) =>
+    const customersWithOpenAI = customers.filter((c) =>
       !!(c.openAICredentials?.apiKey)
     ).length;
 

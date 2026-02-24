@@ -168,6 +168,8 @@ router.post('/agent-activity', async (req: Request, res: Response) => {
           }
         : undefined;
     const source = typeof body.source === 'string' ? body.source.trim() : undefined;
+    const workflowId = typeof body.workflowId === 'string' ? body.workflowId.trim() : undefined;
+    const workflowName = typeof body.workflowName === 'string' ? body.workflowName.trim() : undefined;
 
     const doc = {
       customerId,
@@ -181,6 +183,8 @@ router.post('/agent-activity', async (req: Request, res: Response) => {
       timestamp,
       location: location && (location.country || location.city) ? location : undefined,
       source: source || undefined,
+      workflowId: workflowId || undefined,
+      workflowName: workflowName || undefined,
       createdAt: new Date(),
     };
 
@@ -208,14 +212,22 @@ router.get('/agent-activity', async (req: Request, res: Response) => {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
     const filter: any = { timestamp: { $gte: since } };
-    if (customerId && customerId !== 'all') filter.customerId = customerId.trim();
+    if (customerId && customerId !== 'all') {
+      const cid = customerId.trim();
+      // Ver solo actividad del chatbot Aurora (flujo web-chat n8n)
+      if (cid === 'aurora-chat-ia') {
+        filter.source = 'web-chat';
+      } else {
+        filter.customerId = cid;
+      }
+    }
 
     const events = await db
       .collection(AGENT_ACTIVITY_COLLECTION)
       .find(filter)
       .sort({ timestamp: -1 })
       .limit(limit)
-      .project({ customerId: 1, type: 1, content: 1, outcome: 1, leadId: 1, chatId: 1, timestamp: 1, location: 1, source: 1 })
+      .project({ customerId: 1, type: 1, content: 1, outcome: 1, leadId: 1, chatId: 1, timestamp: 1, location: 1, source: 1, workflowId: 1, workflowName: 1 })
       .toArray();
 
     return res.json({ success: true, data: events });
